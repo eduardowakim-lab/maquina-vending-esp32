@@ -538,8 +538,6 @@ async function updatePassword(request, env, session) {
   }
 
   const salt = randomToken(16);
-  // Mantido baixo o bastante para o limite de CPU do Workers Free.
-  // A senha inicial tem alta entropia e o login possui rate limiting.
   const iterations = 10000;
   const passwordHash = await pbkdf2Hex(newPassword, salt, iterations);
   await env.DB.batch([
@@ -682,7 +680,7 @@ const PUBLIC_HTML = `<!doctype html>
 const ADMIN_HTML = `<!doctype html>
 <html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Administra&ccedil;&atilde;o da m&aacute;quina</title><link rel="stylesheet" href="/styles.css"></head>
-<body><main class="shell admin-shell"><header class="hero compact"><div class="brand">ADMINISTRA&Ccedil;&Atilde;O</div><h1>Produtos da m&aacute;quina</h1><p>Altere produtos e envie testes para o ESP32 conectado.</p></header>
+<body><main class="shell admin-shell"><header class="hero compact"><div class="brand">ADMINISTRA&Ccedil;&Atilde;O</div><h1>Produtos da m&aacute;quina</h1><p>Altere produtos e mande teste para os motores.</p></header>
 <section id="login-panel" class="panel"><h2>Entrar</h2><form id="login-form"><label>Senha<input id="login-password" type="password" autocomplete="current-password" required minlength="6"></label><button type="submit">Entrar</button></form></section>
 <section id="admin-panel" class="panel hidden"><form id="products-form"><div id="admin-products"></div><button type="submit">Salvar produtos</button></form><hr><h2>Trocar senha</h2><form id="password-form"><label>Senha atual<input id="current-password" type="password" autocomplete="current-password" required></label><label>Nova senha (m&iacute;nimo 6 caracteres)<input id="new-password" type="password" autocomplete="new-password" minlength="6" required></label><button class="secondary" type="submit">Alterar senha</button></form><button id="logout" class="link-button" type="button">Sair</button></section>
 <div id="message" class="message hidden" role="status"></div></main><script src="/admin.js?v=4" defer></script></body></html>`;
