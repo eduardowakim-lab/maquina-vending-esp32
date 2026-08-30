@@ -31,6 +31,30 @@ URL do webhook para configurar no Mercado Pago:
 
 Evento/topico: `payment`.
 
+## Deploy automatico pelo GitHub e Cloudflare
+
+O codigo do Worker fica na pasta `web/`. Para a Cloudflare publicar
+automaticamente quando houver commit no GitHub, conecte o Worker existente ao
+repositorio pelo painel da Cloudflare:
+
+1. Abra Cloudflare Dashboard > Workers & Pages.
+2. Entre no Worker `maquina-vending`.
+3. Va em Settings > Builds.
+4. Clique em Connect e selecione o repositorio
+   `eduardowakim-lab/maquina-vending-esp32`.
+5. Configure:
+   - Branch de producao: `main`
+   - Root directory: `web`
+   - Build command: deixe vazio
+   - Deploy command: `npm run deploy`
+6. Salve. Depois disso, cada commit/push na branch `main` dispara um novo
+   deploy do site.
+
+Atencao: secrets como `MERCADO_PAGO_ACCESS_TOKEN`,
+`MERCADO_PAGO_WEBHOOK_SECRET` e chaves do ESP32 nao devem ser colocados no
+GitHub. Eles ficam somente nas configuracoes da Cloudflare ou em arquivos
+locais ignorados pelo Git.
+
 ## Compilar e enviar ao ESP32
 
 Abra `Blink/Blink.ino` na Arduino IDE e selecione:
