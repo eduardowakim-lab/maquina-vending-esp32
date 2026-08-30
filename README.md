@@ -50,6 +50,8 @@ repositorio pelo painel da Cloudflare:
 6. Salve. Depois disso, cada commit/push na branch `main` dispara um novo
    deploy do site.
 
+Integracao GitHub/Cloudflare ativada em 30/08/2026 para deploy automatico.
+
 Atencao: secrets como `MERCADO_PAGO_ACCESS_TOKEN`,
 `MERCADO_PAGO_WEBHOOK_SECRET` e chaves do ESP32 nao devem ser colocados no
 GitHub. Eles ficam somente nas configuracoes da Cloudflare ou em arquivos
