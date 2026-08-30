@@ -1,0 +1,14 @@
+{
+  "name": "maquina-vending-web",
+  "private": true,
+  "scripts": {
+    "check": "node --check src/index.js",
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy --minify"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "latest",
+    "@types/node": "^26.4.0",
+    "wrangler": "latest"
+  }
+}

@@ -3,3 +3,11 @@ build/
 *.elf
 *.map
 
+# Aplicacao web / Cloudflare
+web/node_modules/
+web/.wrangler/
+web/.dry-run/
+web/.dev.vars
+web/*check*.png
+web/0
+web/worker-configuration.d.ts
