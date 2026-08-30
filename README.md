@@ -5,8 +5,8 @@ por WiFiManager e atualização automática OTA pelo GitHub.
 
 ## Atualização OTA
 
-O ESP32 consulta `ota/version.txt` ao conectar ao Wi-Fi e depois a cada seis
-horas. Quando o número publicado for maior que `VERSAO_FIRMWARE`, ele baixa
+O ESP32 consulta `ota/version.txt` somente quando liga ou reinicia e conecta ao
+Wi-Fi. Quando o número publicado for maior que `VERSAO_FIRMWARE`, ele baixa
 `ota/firmware.bin`, instala a atualização e reinicia.
 
 Para publicar uma nova versão:

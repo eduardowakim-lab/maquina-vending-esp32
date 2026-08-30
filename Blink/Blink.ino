@@ -17,9 +17,7 @@ const char* URL_VERSAO =
 const char* URL_FIRMWARE =
   "https://raw.githubusercontent.com/eduardowakim-lab/maquina-vending-esp32/main/ota/firmware.bin";
 
-// Consulta ao ligar e depois a cada 6 horas.
-const unsigned long INTERVALO_OTA = 6UL * 60UL * 60UL * 1000UL;
-unsigned long ultimaConsultaOTA = 0;
+// A atualizacao e consultada somente quando o ESP32 liga ou reinicia.
 
 // =========================
 // LED DO WIFI
@@ -264,7 +262,6 @@ void setup() {
 
   // Verifica uma nova versao logo depois de conectar.
   verificarAtualizacao();
-  ultimaConsultaOTA = millis();
 }
 
 
@@ -317,11 +314,6 @@ void loop() {
 
     // Wi-Fi conectado
     digitalWrite(LED_WIFI, HIGH);
-
-    if (millis() - ultimaConsultaOTA >= INTERVALO_OTA) {
-      ultimaConsultaOTA = millis();
-      verificarAtualizacao();
-    }
 
   } else {
 
