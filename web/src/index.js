@@ -538,6 +538,8 @@ async function updatePassword(request, env, session) {
   }
 
   const salt = randomToken(16);
+  // Mantido baixo o bastante para o limite de CPU do Workers Free.
+  // A senha inicial tem alta entropia e o login possui rate limiting.
   const iterations = 10000;
   const passwordHash = await pbkdf2Hex(newPassword, salt, iterations);
   await env.DB.batch([
