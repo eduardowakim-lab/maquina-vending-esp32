@@ -10,9 +10,26 @@ ESP32 consulta a Cloudflare a cada 2 segundos, recebe o comando e gira somente
 o motor solicitado. A chave privada do dispositivo fica em
 `Blink/arduino_secrets.h` e nao e enviada ao GitHub.
 
-O botao de teste e exclusivo do administrador. No fluxo de venda definitivo,
-o comando devera ser criado no servidor apenas depois que o Mercado Pago
-confirmar o pagamento por webhook.
+O botao de teste e exclusivo do administrador. No fluxo de venda, o comprador
+clica em `Comprar agora`, a Cloudflare cria o checkout no Mercado Pago usando
+o preco atual salvo no admin, e o ESP32 so recebe o comando depois que o
+pagamento aprovado chega pelo webhook.
+
+## Mercado Pago
+
+O admin altera nome, preco, foto e disponibilidade do produto. Nao e preciso
+criar um link manual no Mercado Pago para cada preco.
+
+Configure estes secrets no Worker:
+
+- `MERCADO_PAGO_ACCESS_TOKEN`: access token da aplicacao Mercado Pago.
+- `MERCADO_PAGO_WEBHOOK_SECRET`: chave do webhook gerada em Suas integracoes.
+
+URL do webhook para configurar no Mercado Pago:
+
+`https://maquina-vending.eduardo-wakim.workers.dev/api/mercado-pago/webhook`
+
+Evento/topico: `payment`.
 
 ## Compilar e enviar ao ESP32
 

@@ -2,6 +2,9 @@ const SESSION_SECONDS = 8 * 60 * 60;
 const LOGIN_WINDOW_SECONDS = 15 * 60;
 const LOGIN_MAX_ATTEMPTS = 10;
 const MAX_IMAGE_BYTES = 2 * 1024 * 1024;
+const PUBLIC_BASE_URL = "https://maquina-vending.eduardo-wakim.workers.dev";
+const MERCADO_PAGO_PREFERENCES_URL = "https://api.mercadopago.com/checkout/preferences";
+const MERCADO_PAGO_PAYMENTS_URL = "https://api.mercadopago.com/v1/payments";
 const IMAGE_TYPES = new Map([
   ["image/jpeg", "jpg"],
   ["image/png", "png"],
@@ -34,11 +37,21 @@ async function route(request, env) {
 
   if (request.method === "GET" && path === "/") return html(PUBLIC_HTML);
   if (request.method === "GET" && path === "/admin") return html(ADMIN_HTML);
+  if (request.method === "GET" && path === "/payment/success") return html(paymentStatusHtml("Pagamento aprovado", "Assim que o Mercado Pago confirmar, a maquina libera o produto."));
+  if (request.method === "GET" && path === "/payment/pending") return html(paymentStatusHtml("Pagamento pendente", "Aguarde a confirmacao do Mercado Pago."));
+  if (request.method === "GET" && path === "/payment/failure") return html(paymentStatusHtml("Pagamento nao aprovado", "Voce pode voltar e tentar novamente."));
   if (request.method === "GET" && path === "/styles.css") return css(STYLES);
   if (request.method === "GET" && path === "/app.js") return javascript(PUBLIC_JS);
   if (request.method === "GET" && path === "/admin.js") return javascript(ADMIN_JS);
   if (request.method === "GET" && path === "/favicon.ico") return new Response(null, { status: 204 });
   if (request.method === "GET" && path === "/api/products") return listPublicProducts(env);
+  if (request.method === "POST" && path === "/api/checkout") {
+    requireSameOrigin(request);
+    return createCheckout(request, env);
+  }
+  if (request.method === "POST" && path === "/api/mercado-pago/webhook") {
+    return mercadoPagoWebhook(request, env, url);
+  }
   if (request.method === "GET" && path.startsWith("/images/")) return getProductImage(path, env);
 
   if (request.method === "POST" && path === "/api/admin/login") {
@@ -89,6 +102,184 @@ async function route(request, env) {
   }
 
   return json({ error: "Nao encontrado." }, 404);
+}
+
+async function createCheckout(request, env) {
+  if (!env.MERCADO_PAGO_ACCESS_TOKEN) {
+    throw new HttpError(503, "Mercado Pago ainda nao configurado.");
+  }
+
+  const body = await readJson(request);
+  const productId = Number(body.product_id);
+  if (![1, 2].includes(productId)) throw new HttpError(400, "Produto invalido.");
+
+  const product = await env.DB.prepare(
+    "SELECT id, name, price_cents, image_key FROM products WHERE id = ? AND enabled = 1"
+  ).bind(productId).first();
+  if (!product) throw new HttpError(404, "Produto indisponivel.");
+
+  const now = Math.floor(Date.now() / 1000);
+  const orderId = `order-${now}-${crypto.randomUUID()}`;
+  await env.DB.prepare(
+    "INSERT INTO payment_orders (id, product_id, product_name, price_cents, status, created_at, updated_at) VALUES (?, ?, ?, ?, 'created', ?, ?)"
+  ).bind(orderId, product.id, product.name, product.price_cents, now, now).run();
+
+  const origin = new URL(request.url).origin || PUBLIC_BASE_URL;
+  const preference = await createMercadoPagoPreference(env, {
+    orderId,
+    product,
+    origin
+  });
+
+  await env.DB.prepare(
+    "UPDATE payment_orders SET status = 'pending', preference_id = ?, init_point = ?, updated_at = ? WHERE id = ?"
+  ).bind(preference.id || "", preference.init_point || "", now, orderId).run();
+
+  if (!preference.init_point) throw new HttpError(502, "Mercado Pago nao retornou o link de pagamento.");
+  return json({ checkout_url: preference.init_point });
+}
+
+async function createMercadoPagoPreference(env, { orderId, product, origin }) {
+  const imageUrl = product.image_key ? `${origin}/images/${encodeURIComponent(product.image_key)}` : undefined;
+  const payload = {
+    items: [{
+      id: String(product.id),
+      title: product.name,
+      quantity: 1,
+      currency_id: "BRL",
+      unit_price: product.price_cents / 100,
+      ...(imageUrl ? { picture_url: imageUrl } : {})
+    }],
+    external_reference: orderId,
+    notification_url: `${origin}/api/mercado-pago/webhook?source_news=webhooks`,
+    back_urls: {
+      success: `${origin}/payment/success`,
+      pending: `${origin}/payment/pending`,
+      failure: `${origin}/payment/failure`
+    },
+    auto_return: "approved",
+    statement_descriptor: "VENDING",
+    metadata: {
+      product_id: product.id,
+      order_id: orderId
+    }
+  };
+
+  const response = await fetch(MERCADO_PAGO_PREFERENCES_URL, {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${env.MERCADO_PAGO_ACCESS_TOKEN}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(payload)
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    console.error(JSON.stringify({ event: "mercado_pago_preference_error", status: response.status, error: data?.message || data?.error || "unknown" }));
+    throw new HttpError(502, "Mercado Pago recusou a criacao do pagamento.");
+  }
+  return data;
+}
+
+async function mercadoPagoWebhook(request, env, url) {
+  if (!env.MERCADO_PAGO_ACCESS_TOKEN) throw new HttpError(503, "Mercado Pago ainda nao configurado.");
+
+  let body = {};
+  try {
+    body = await request.json();
+  } catch {
+    body = {};
+  }
+
+  const dataId = getMercadoPagoDataId(url, body);
+  const type = url.searchParams.get("type") || body.type || "";
+  if (!dataId || type !== "payment") return json({ ok: true });
+
+  if (env.MERCADO_PAGO_WEBHOOK_SECRET) {
+    const valid = await verifyMercadoPagoWebhookSignature(request, env.MERCADO_PAGO_WEBHOOK_SECRET, dataId);
+    if (!valid) throw new HttpError(401, "Assinatura invalida.");
+  }
+
+  const payment = await fetchMercadoPagoPayment(env, dataId);
+  await processMercadoPagoPayment(env, payment);
+  return json({ ok: true });
+}
+
+function getMercadoPagoDataId(url, body) {
+  return url.searchParams.get("data.id") || url.searchParams.get("data_id") || body?.data?.id || "";
+}
+
+async function verifyMercadoPagoWebhookSignature(request, secret, dataId) {
+  const signature = request.headers.get("x-signature") || "";
+  const requestId = request.headers.get("x-request-id") || "";
+  const parts = Object.fromEntries(signature.split(",").map((part) => {
+    const [key, ...value] = part.trim().split("=");
+    return [key, value.join("=")];
+  }));
+  if (!parts.ts || !parts.v1 || !requestId) return false;
+
+  const manifest = `id:${dataId};request-id:${requestId};ts:${parts.ts};`;
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
+  const signed = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(manifest));
+  return constantTimeEqual(bytesToHex(new Uint8Array(signed)), parts.v1);
+}
+
+async function fetchMercadoPagoPayment(env, paymentId) {
+  const response = await fetch(`${MERCADO_PAGO_PAYMENTS_URL}/${encodeURIComponent(paymentId)}`, {
+    headers: {
+      "Authorization": `Bearer ${env.MERCADO_PAGO_ACCESS_TOKEN}`
+    }
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    console.error(JSON.stringify({ event: "mercado_pago_payment_error", status: response.status, payment_id: paymentId }));
+    throw new HttpError(502, "Nao foi possivel consultar o pagamento.");
+  }
+  return data;
+}
+
+async function processMercadoPagoPayment(env, payment) {
+  const orderId = typeof payment.external_reference === "string" ? payment.external_reference : "";
+  const paymentId = String(payment.id || "");
+  if (!orderId || !paymentId) return;
+
+  const now = Math.floor(Date.now() / 1000);
+  const order = await env.DB.prepare("SELECT * FROM payment_orders WHERE id = ?").bind(orderId).first();
+  if (!order) return;
+  if (order.device_command_id) return;
+
+  const status = normalizeMercadoPagoStatus(payment.status || "");
+  await env.DB.prepare(
+    "UPDATE payment_orders SET status = ?, mp_payment_id = ?, updated_at = ?, paid_at = CASE WHEN ? = 'approved' THEN ? ELSE paid_at END WHERE id = ?"
+  ).bind(status, paymentId, now, status, now, orderId).run();
+
+  if (status !== "approved") return;
+  const command = await enqueuePaidCommand(env, order.device_id || "machine-1", Number(order.product_id), now);
+  await env.DB.prepare(
+    "UPDATE payment_orders SET status = 'commanded', device_command_id = ?, command_created_at = ?, updated_at = ? WHERE id = ? AND device_command_id IS NULL"
+  ).bind(command.id, now, now, orderId).run();
+}
+
+function normalizeMercadoPagoStatus(status) {
+  if (status === "approved") return "approved";
+  if (status === "rejected") return "rejected";
+  if (status === "cancelled") return "cancelled";
+  if (status === "refunded") return "refunded";
+  if (status === "charged_back") return "charged_back";
+  return "pending";
+}
+
+async function enqueuePaidCommand(env, deviceId, motor, now) {
+  const result = await env.DB.prepare(
+    "INSERT INTO device_commands (device_id, motor, status, created_at) VALUES (?, ?, 'pending', ?)"
+  ).bind(deviceId, motor, now).run();
+  return { id: result.meta.last_row_id };
 }
 
 async function createTestCommand(env, motor) {
@@ -314,7 +505,6 @@ async function updateProducts(request, env) {
     const id = Number(product.id);
     const name = typeof product.name === "string" ? product.name.trim() : "";
     const priceCents = Number(product.price_cents);
-    const paymentUrl = typeof product.payment_url === "string" ? product.payment_url.trim() : "";
     const enabled = product.enabled === true ? 1 : 0;
 
     if (![1, 2].includes(id) || seen.has(id)) return json({ error: "Produto invalido." }, 400);
@@ -322,14 +512,10 @@ async function updateProducts(request, env) {
     if (!Number.isInteger(priceCents) || priceCents < 1 || priceCents > 1000000) {
       return json({ error: "Preco invalido." }, 400);
     }
-    if (paymentUrl && !isAllowedPaymentUrl(paymentUrl)) {
-      return json({ error: "Use um link HTTPS oficial do Mercado Pago." }, 400);
-    }
-
     seen.add(id);
     statements.push(env.DB.prepare(
       "UPDATE products SET name = ?, price_cents = ?, payment_url = ?, enabled = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?"
-    ).bind(name, priceCents, paymentUrl, enabled, id));
+    ).bind(name, priceCents, "", enabled, id));
   }
 
   await env.DB.batch(statements);
@@ -479,12 +665,19 @@ class HttpError extends Error {
   }
 }
 
+function paymentStatusHtml(title, message) {
+  return `<!doctype html>
+<html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${title}</title><link rel="stylesheet" href="/styles.css"></head>
+<body><main class="shell"><header class="hero"><div class="brand">MERCADO PAGO</div><h1>${title}</h1><p>${message}</p></header><p class="secure"><a href="/">Voltar aos produtos</a></p></main></body></html>`;
+}
+
 const PUBLIC_HTML = `<!doctype html>
 <html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Escolha seu produto</title><link rel="stylesheet" href="/styles.css"></head>
 <body><main class="shell"><header class="hero"><div class="brand">COMPRA R&Aacute;PIDA</div><h1>Escolha seu produto</h1><p>Selecione uma op&ccedil;&atilde;o para continuar ao pagamento seguro.</p></header>
 <section id="products" class="products" aria-live="polite"><div class="loading">Carregando produtos...</div></section>
-<p class="secure">&#128274; Pagamento processado pelo Mercado Pago</p></main><script src="/app.js?v=2" defer></script></body></html>`;
+<p class="secure">&#128274; Pagamento processado pelo Mercado Pago</p></main><script src="/app.js?v=4" defer></script></body></html>`;
 
 const ADMIN_HTML = `<!doctype html>
 <html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -492,10 +685,10 @@ const ADMIN_HTML = `<!doctype html>
 <body><main class="shell admin-shell"><header class="hero compact"><div class="brand">ADMINISTRA&Ccedil;&Atilde;O</div><h1>Produtos da m&aacute;quina</h1><p>Altere produtos e envie testes para o ESP32 conectado.</p></header>
 <section id="login-panel" class="panel"><h2>Entrar</h2><form id="login-form"><label>Senha<input id="login-password" type="password" autocomplete="current-password" required minlength="6"></label><button type="submit">Entrar</button></form></section>
 <section id="admin-panel" class="panel hidden"><form id="products-form"><div id="admin-products"></div><button type="submit">Salvar produtos</button></form><hr><h2>Trocar senha</h2><form id="password-form"><label>Senha atual<input id="current-password" type="password" autocomplete="current-password" required></label><label>Nova senha (m&iacute;nimo 6 caracteres)<input id="new-password" type="password" autocomplete="new-password" minlength="6" required></label><button class="secondary" type="submit">Alterar senha</button></form><button id="logout" class="link-button" type="button">Sair</button></section>
-<div id="message" class="message hidden" role="status"></div></main><script src="/admin.js?v=3" defer></script></body></html>`;
+<div id="message" class="message hidden" role="status"></div></main><script src="/admin.js?v=4" defer></script></body></html>`;
 
 const STYLES = `:root{color-scheme:light;--ink:#182026;--muted:#657078;--paper:#fffdf8;--accent:#00a650;--accent-dark:#087a42;--line:#e7e2d8;--shadow:0 18px 50px rgba(30,35,32,.12)}*{box-sizing:border-box}body{margin:0;min-height:100vh;background:radial-gradient(circle at 15% 0,#dcffe9 0,transparent 34%),linear-gradient(145deg,#f7f4ec,#eef7f0);font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;color:var(--ink)}.shell{width:min(980px,calc(100% - 32px));margin:auto;padding:54px 0 32px}.hero{text-align:center;margin-bottom:34px}.hero.compact{margin-bottom:24px}.brand{display:inline-block;padding:7px 12px;border:1px solid #a7dcb9;border-radius:999px;color:var(--accent-dark);font-size:.76rem;font-weight:800;letter-spacing:.14em}.hero h1{font-size:clamp(2.1rem,7vw,4.2rem);line-height:.98;margin:18px 0 13px;letter-spacing:-.055em}.compact h1{font-size:clamp(2rem,6vw,3.3rem)}.hero p{color:var(--muted);font-size:1.06rem;margin:0}.products{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:22px}.product,.panel{background:rgba(255,255,255,.88);border:1px solid rgba(255,255,255,.9);border-radius:26px;box-shadow:var(--shadow);backdrop-filter:blur(10px)}.product{padding:28px;display:flex;flex-direction:column;min-height:310px}.product-number{width:58px;height:58px;border-radius:18px;background:#e8fff0;display:grid;place-items:center;color:var(--accent-dark);font-weight:900;font-size:1.5rem}.product-image{width:100%;height:190px;object-fit:cover;border-radius:18px;background:#eef2ef}.product h2{font-size:1.65rem;margin:26px 0 6px}.price{font-size:2.25rem;font-weight:900;letter-spacing:-.04em;margin:auto 0 20px}.product button,form button{border:0;border-radius:15px;background:var(--accent);color:white;font:inherit;font-weight:800;padding:15px 18px;cursor:pointer;transition:.2s transform,.2s background}.product button:hover,form button:hover{background:var(--accent-dark);transform:translateY(-1px)}button:disabled{background:#b9c0bc;cursor:not-allowed;transform:none}.secure{text-align:center;color:var(--muted);font-size:.9rem;margin:24px 0}.loading,.empty{grid-column:1/-1;text-align:center;padding:50px;color:var(--muted)}.admin-shell{max-width:760px}.panel{padding:26px}.hidden{display:none!important}form{display:grid;gap:16px}label{display:grid;gap:7px;font-weight:700;font-size:.92rem}input{width:100%;border:1px solid var(--line);border-radius:12px;background:white;padding:13px 14px;font:inherit;color:var(--ink)}input:focus{outline:3px solid rgba(0,166,80,.16);border-color:var(--accent)}.admin-product{padding:20px 0;border-bottom:1px solid var(--line);display:grid;grid-template-columns:1fr 150px;gap:14px}.admin-product:first-child{padding-top:0}.admin-product:last-child{border-bottom:0}.full{grid-column:1/-1}.check{display:flex;align-items:center;gap:9px}.check input{width:auto}.photo-row{display:flex;align-items:center;gap:12px}.photo-preview{width:76px;height:76px;object-fit:cover;border-radius:12px;background:#eef2ef}.remove-photo{border:0;background:transparent;color:#a12424;text-decoration:underline;cursor:pointer}.hint{color:var(--muted);font-size:.8rem;font-weight:500}.panel hr{border:0;border-top:1px solid var(--line);margin:28px 0}.secondary{background:#24302a}.link-button{margin-top:20px;background:transparent;border:0;color:var(--muted);text-decoration:underline;cursor:pointer}.message{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:#182026;color:white;border-radius:12px;padding:12px 18px;box-shadow:var(--shadow)}@media(max-width:650px){.shell{padding-top:34px}.products{grid-template-columns:1fr}.product{min-height:255px}.admin-product{grid-template-columns:1fr}}`;
 
-const PUBLIC_JS = `const container=document.querySelector("#products");const money=new Intl.NumberFormat("pt-BR",{style:"currency",currency:"BRL"});async function load(){try{const response=await fetch("/api/products",{headers:{Accept:"application/json"}});if(!response.ok)throw new Error();const data=await response.json();container.replaceChildren();if(!data.products.length){container.innerHTML='<div class="empty">Nenhum produto dispon\\u00edvel.</div>';return}for(const item of data.products){const card=document.createElement("article");card.className="product";let visual;if(item.image_url){visual=document.createElement("img");visual.className="product-image";visual.src=item.image_url;visual.alt=item.name;visual.loading="lazy"}else{visual=document.createElement("div");visual.className="product-number";visual.textContent=item.id}const title=document.createElement("h2");title.textContent=item.name;const price=document.createElement("div");price.className="price";price.textContent=money.format(item.price_cents/100);const button=document.createElement("button");button.type="button";button.textContent=item.payment_url?"Comprar agora":"Pagamento em configura\\u00e7\\u00e3o";button.disabled=!item.payment_url;if(item.payment_url)button.addEventListener("click",()=>location.assign(item.payment_url));card.append(visual,title,price,button);container.append(card)}}catch{container.innerHTML='<div class="empty">N\\u00e3o foi poss\\u00edvel carregar os produtos. Tente novamente.</div>'}}load();`;
+const PUBLIC_JS = `const container=document.querySelector("#products");const money=new Intl.NumberFormat("pt-BR",{style:"currency",currency:"BRL"});async function startCheckout(item,button){button.disabled=true;const original=button.textContent;button.textContent="Abrindo pagamento...";try{const response=await fetch("/api/checkout",{method:"POST",headers:{"Content-Type":"application/json",Accept:"application/json"},body:JSON.stringify({product_id:item.id})});const data=await response.json();if(!response.ok)throw new Error(data.error||"Nao foi possivel abrir o pagamento.");location.assign(data.checkout_url)}catch(error){button.textContent=error.message;setTimeout(()=>{button.textContent=original;button.disabled=false},2500)}}async function load(){try{const response=await fetch("/api/products",{headers:{Accept:"application/json"}});if(!response.ok)throw new Error();const data=await response.json();container.replaceChildren();if(!data.products.length){container.innerHTML='<div class="empty">Nenhum produto dispon\\u00edvel.</div>';return}for(const item of data.products){const card=document.createElement("article");card.className="product";let visual;if(item.image_url){visual=document.createElement("img");visual.className="product-image";visual.src=item.image_url;visual.alt=item.name;visual.loading="lazy"}else{visual=document.createElement("div");visual.className="product-number";visual.textContent=item.id}const title=document.createElement("h2");title.textContent=item.name;const price=document.createElement("div");price.className="price";price.textContent=money.format(item.price_cents/100);const button=document.createElement("button");button.type="button";button.textContent="Comprar agora";button.addEventListener("click",()=>startCheckout(item,button));card.append(visual,title,price,button);container.append(card)}}catch{container.innerHTML='<div class="empty">N\\u00e3o foi poss\\u00edvel carregar os produtos. Tente novamente.</div>'}}load();`;
 
-const ADMIN_JS = `const loginPanel=document.querySelector("#login-panel");const adminPanel=document.querySelector("#admin-panel");const message=document.querySelector("#message");const productsRoot=document.querySelector("#admin-products");function notify(text){message.textContent=text;message.classList.remove("hidden");setTimeout(()=>message.classList.add("hidden"),3500)}async function api(path,options={}){const response=await fetch(path,{...options,headers:{"Content-Type":"application/json",...(options.headers||{})}});const data=await response.json();if(!response.ok)throw new Error(data.error||"Erro inesperado.");return data}function field(label,type,value,cls=""){const wrap=document.createElement("label");if(cls)wrap.className=cls;wrap.append(document.createTextNode(label));const input=document.createElement("input");input.type=type;input.value=value;wrap.append(input);return{wrap,input}}async function uploadPhoto(box){const file=box.querySelector('[data-field="photo"]').files[0];if(!file)return;const response=await fetch('/api/admin/products/'+box.dataset.id+'/image',{method:"POST",headers:{"Content-Type":file.type},body:file});const data=await response.json();if(!response.ok)throw new Error(data.error||"Erro ao enviar foto.")}async function loadAdmin(){try{const data=await api("/api/admin/products");loginPanel.classList.add("hidden");adminPanel.classList.remove("hidden");productsRoot.replaceChildren();for(const product of data.products){const box=document.createElement("section");box.className="admin-product";box.dataset.id=product.id;const name=field("Nome","text",product.name);name.input.dataset.field="name";name.input.maxLength=60;const price=field("Preco (R$)","number",(product.price_cents/100).toFixed(2));price.input.dataset.field="price";price.input.min="0.01";price.input.step="0.01";const link=field("Link de pagamento Mercado Pago","url",product.payment_url,"full");link.input.dataset.field="url";link.input.placeholder="https://mpago.la/...";const photo=field("Foto do produto (JPG, PNG ou WEBP, ate 2 MB)","file","","full");photo.input.dataset.field="photo";photo.input.accept="image/jpeg,image/png,image/webp";const enabled=document.createElement("label");enabled.className="check full";const check=document.createElement("input");check.type="checkbox";check.checked=Boolean(product.enabled);check.dataset.field="enabled";enabled.append(check,document.createTextNode("Produto disponivel"));box.append(name.wrap,price.wrap,link.wrap);if(product.image_url){const row=document.createElement("div");row.className="photo-row full";const preview=document.createElement("img");preview.className="photo-preview";preview.src=product.image_url;preview.alt="Foto atual";const remove=document.createElement("button");remove.type="button";remove.className="remove-photo";remove.textContent="Remover foto";remove.addEventListener("click",async()=>{try{await api('/api/admin/products/'+product.id+'/image',{method:"DELETE",body:"{}"});await loadAdmin();notify("Foto removida.")}catch(error){notify(error.message)}});row.append(preview,remove);box.append(row)}const test=document.createElement("button");test.type="button";test.className="secondary full";test.textContent="Testar motor "+product.id;test.addEventListener("click",async()=>{test.disabled=true;try{await api('/api/admin/products/'+product.id+'/test',{method:"POST",body:"{}"});notify("Teste enviado. O ESP32 deve responder em ate 3 segundos.")}catch(error){notify(error.message)}finally{test.disabled=false}});box.append(photo.wrap,enabled,test);productsRoot.append(box)}}catch{loginPanel.classList.remove("hidden");adminPanel.classList.add("hidden")}}document.querySelector("#login-form").addEventListener("submit",async event=>{event.preventDefault();try{await api("/api/admin/login",{method:"POST",body:JSON.stringify({password:document.querySelector("#login-password").value})});document.querySelector("#login-password").value="";await loadAdmin();notify("Login realizado.")}catch(error){notify(error.message)}});document.querySelector("#products-form").addEventListener("submit",async event=>{event.preventDefault();const boxes=[...document.querySelectorAll(".admin-product")];const products=boxes.map(box=>({id:Number(box.dataset.id),name:box.querySelector('[data-field="name"]').value,price_cents:Math.round(Number(box.querySelector('[data-field="price"]').value)*100),payment_url:box.querySelector('[data-field="url"]').value,enabled:box.querySelector('[data-field="enabled"]').checked}));try{await api("/api/admin/products",{method:"PUT",body:JSON.stringify({products})});for(const box of boxes)await uploadPhoto(box);await loadAdmin();notify("Produtos e fotos salvos.")}catch(error){notify(error.message)}});document.querySelector("#password-form").addEventListener("submit",async event=>{event.preventDefault();try{await api("/api/admin/password",{method:"PUT",body:JSON.stringify({current_password:document.querySelector("#current-password").value,new_password:document.querySelector("#new-password").value})});event.target.reset();notify("Senha alterada.")}catch(error){notify(error.message)}});document.querySelector("#logout").addEventListener("click",async()=>{await api("/api/admin/logout",{method:"POST",body:"{}"});location.reload()});loadAdmin();`;
+const ADMIN_JS = `const loginPanel=document.querySelector("#login-panel");const adminPanel=document.querySelector("#admin-panel");const message=document.querySelector("#message");const productsRoot=document.querySelector("#admin-products");function notify(text){message.textContent=text;message.classList.remove("hidden");setTimeout(()=>message.classList.add("hidden"),3500)}async function api(path,options={}){const response=await fetch(path,{...options,headers:{"Content-Type":"application/json",...(options.headers||{})}});const data=await response.json();if(!response.ok)throw new Error(data.error||"Erro inesperado.");return data}function field(label,type,value,cls=""){const wrap=document.createElement("label");if(cls)wrap.className=cls;wrap.append(document.createTextNode(label));const input=document.createElement("input");input.type=type;input.value=value;wrap.append(input);return{wrap,input}}async function uploadPhoto(box){const file=box.querySelector('[data-field="photo"]').files[0];if(!file)return;const response=await fetch('/api/admin/products/'+box.dataset.id+'/image',{method:"POST",headers:{"Content-Type":file.type},body:file});const data=await response.json();if(!response.ok)throw new Error(data.error||"Erro ao enviar foto.")}async function loadAdmin(){try{const data=await api("/api/admin/products");loginPanel.classList.add("hidden");adminPanel.classList.remove("hidden");productsRoot.replaceChildren();for(const product of data.products){const box=document.createElement("section");box.className="admin-product";box.dataset.id=product.id;const name=field("Nome","text",product.name);name.input.dataset.field="name";name.input.maxLength=60;const price=field("Preco (R$)","number",(product.price_cents/100).toFixed(2));price.input.dataset.field="price";price.input.min="0.01";price.input.step="0.01";const photo=field("Foto do produto (JPG, PNG ou WEBP, ate 2 MB)","file","","full");photo.input.dataset.field="photo";photo.input.accept="image/jpeg,image/png,image/webp";const enabled=document.createElement("label");enabled.className="check full";const check=document.createElement("input");check.type="checkbox";check.checked=Boolean(product.enabled);check.dataset.field="enabled";enabled.append(check,document.createTextNode("Produto disponivel"));box.append(name.wrap,price.wrap);if(product.image_url){const row=document.createElement("div");row.className="photo-row full";const preview=document.createElement("img");preview.className="photo-preview";preview.src=product.image_url;preview.alt="Foto atual";const remove=document.createElement("button");remove.type="button";remove.className="remove-photo";remove.textContent="Remover foto";remove.addEventListener("click",async()=>{try{await api('/api/admin/products/'+product.id+'/image',{method:"DELETE",body:"{}"});await loadAdmin();notify("Foto removida.")}catch(error){notify(error.message)}});row.append(preview,remove);box.append(row)}const test=document.createElement("button");test.type="button";test.className="secondary full";test.textContent="Testar motor "+product.id;test.addEventListener("click",async()=>{test.disabled=true;try{await api('/api/admin/products/'+product.id+'/test',{method:"POST",body:"{}"});notify("Teste enviado. O ESP32 deve responder em ate 3 segundos.")}catch(error){notify(error.message)}finally{test.disabled=false}});box.append(photo.wrap,enabled,test);productsRoot.append(box)}}catch{loginPanel.classList.remove("hidden");adminPanel.classList.add("hidden")}}document.querySelector("#login-form").addEventListener("submit",async event=>{event.preventDefault();try{await api("/api/admin/login",{method:"POST",body:JSON.stringify({password:document.querySelector("#login-password").value})});document.querySelector("#login-password").value="";await loadAdmin();notify("Login realizado.")}catch(error){notify(error.message)}});document.querySelector("#products-form").addEventListener("submit",async event=>{event.preventDefault();const boxes=[...document.querySelectorAll(".admin-product")];const products=boxes.map(box=>({id:Number(box.dataset.id),name:box.querySelector('[data-field="name"]').value,price_cents:Math.round(Number(box.querySelector('[data-field="price"]').value)*100),enabled:box.querySelector('[data-field="enabled"]').checked}));try{await api("/api/admin/products",{method:"PUT",body:JSON.stringify({products})});for(const box of boxes)await uploadPhoto(box);await loadAdmin();notify("Produtos e fotos salvos.")}catch(error){notify(error.message)}});document.querySelector("#password-form").addEventListener("submit",async event=>{event.preventDefault();try{await api("/api/admin/password",{method:"PUT",body:JSON.stringify({current_password:document.querySelector("#current-password").value,new_password:document.querySelector("#new-password").value})});event.target.reset();notify("Senha alterada.")}catch(error){notify(error.message)}});document.querySelector("#logout").addEventListener("click",async()=>{await api("/api/admin/logout",{method:"POST",body:"{}"});location.reload()});loadAdmin();`;
