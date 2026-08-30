@@ -1,0 +1,5 @@
+# Arquivos temporarios e de compilacao do Arduino IDE
+build/
+*.elf
+*.map
+
