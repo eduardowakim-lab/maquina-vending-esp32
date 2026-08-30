@@ -11,3 +11,6 @@ web/.dev.vars
 web/*check*.png
 web/0
 web/worker-configuration.d.ts
+
+# Chave privada que autoriza este ESP32 a receber comandos
+Blink/arduino_secrets.h

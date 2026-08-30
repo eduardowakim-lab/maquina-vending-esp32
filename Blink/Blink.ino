@@ -1,21 +1,29 @@
-#include <Keypad.h>
 #include <WiFi.h>
 #include <WiFiManager.h>
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
 #include <HTTPUpdate.h>
+#include "arduino_secrets.h"
 
 // =========================
 // ATUALIZACAO OTA PELO GITHUB
 // =========================
 
 // Aumente este numero antes de compilar e publicar uma nova versao.
-#define VERSAO_FIRMWARE 1
+#define VERSAO_FIRMWARE 2
 
 const char* URL_VERSAO =
   "https://raw.githubusercontent.com/eduardowakim-lab/maquina-vending-esp32/main/ota/version.txt";
 const char* URL_FIRMWARE =
   "https://raw.githubusercontent.com/eduardowakim-lab/maquina-vending-esp32/main/ota/firmware.bin";
+
+const char* URL_COMANDOS =
+  "https://maquina-vending.eduardo-wakim.workers.dev/api/device/commands/next?device_id=machine-1";
+const char* URL_CONCLUIR_COMANDO =
+  "https://maquina-vending.eduardo-wakim.workers.dev/api/device/commands/";
+
+const unsigned long INTERVALO_COMANDOS_MS = 2000;
+unsigned long ultimaConsultaComandos = 0;
 
 // A atualizacao e consultada somente quando o ESP32 liga ou reinicia.
 
@@ -35,37 +43,6 @@ const char* URL_FIRMWARE =
 
 #define ENABLE_MOTOR1 21
 #define ENABLE_MOTOR2 13
-
-
-// =========================
-// TECLADO 4x4
-// =========================
-
-const byte LINHAS = 4;
-const byte COLUNAS = 4;
-
-char teclas[LINHAS][COLUNAS] = {
-  {'1', '2', '3', 'A'},
-  {'4', '5', '6', 'B'},
-  {'7', '8', '9', 'C'},
-  {'*', '0', '#', 'D'}
-};
-
-byte pinosLinhas[LINHAS] = {
-  14, 27, 26, 25
-};
-
-byte pinosColunas[COLUNAS] = {
-  33, 32, 35, 34
-};
-
-Keypad teclado = Keypad(
-  makeKeymap(teclas),
-  pinosLinhas,
-  pinosColunas,
-  LINHAS,
-  COLUNAS
-);
 
 
 // =========================
@@ -175,6 +152,99 @@ void girarMotor(int enablePin) {
 
 
 // =========================
+// COMANDOS RECEBIDOS DO SITE
+// =========================
+
+void confirmarComando(long comandoId) {
+
+  WiFiClientSecure cliente;
+  cliente.setInsecure();
+
+  HTTPClient http;
+  http.setConnectTimeout(5000);
+  http.setTimeout(5000);
+
+  String url = String(URL_CONCLUIR_COMANDO) + comandoId +
+               "/complete?device_id=machine-1";
+
+  if (!http.begin(cliente, url)) {
+    Serial.println("Nao foi possivel confirmar o comando.");
+    return;
+  }
+
+  http.addHeader("X-Device-Key", CHAVE_DISPOSITIVO);
+  http.addHeader("Content-Type", "text/plain");
+  int codigoHttp = http.POST("");
+  Serial.printf("Confirmacao do comando %ld: HTTP %d\n", comandoId, codigoHttp);
+  http.end();
+}
+
+void consultarComandos() {
+
+  if (WiFi.status() != WL_CONNECTED) {
+    return;
+  }
+
+  WiFiClientSecure cliente;
+  cliente.setInsecure();
+
+  HTTPClient http;
+  http.setConnectTimeout(5000);
+  http.setTimeout(5000);
+
+  if (!http.begin(cliente, URL_COMANDOS)) {
+    Serial.println("Nao foi possivel consultar comandos.");
+    return;
+  }
+
+  http.addHeader("X-Device-Key", CHAVE_DISPOSITIVO);
+  int codigoHttp = http.GET();
+
+  if (codigoHttp == HTTP_CODE_NO_CONTENT) {
+    http.end();
+    return;
+  }
+
+  if (codigoHttp != HTTP_CODE_OK) {
+    Serial.printf("Falha ao consultar comandos. HTTP: %d\n", codigoHttp);
+    http.end();
+    return;
+  }
+
+  String comando = http.getString();
+  http.end();
+  comando.trim();
+
+  int separador = comando.indexOf(',');
+  if (separador <= 0) {
+    Serial.println("Comando recebido em formato invalido.");
+    return;
+  }
+
+  long comandoId = comando.substring(0, separador).toInt();
+  int motor = comando.substring(separador + 1).toInt();
+
+  if (comandoId <= 0 || (motor != 1 && motor != 2)) {
+    Serial.println("Comando recebido com valores invalidos.");
+    return;
+  }
+
+  Serial.printf("Site solicitou o motor %d. Comando %ld.\n", motor, comandoId);
+
+  digitalWrite(ENABLE_MOTOR1, HIGH);
+  digitalWrite(ENABLE_MOTOR2, HIGH);
+
+  if (motor == 1) {
+    girarMotor(ENABLE_MOTOR1);
+  } else {
+    girarMotor(ENABLE_MOTOR2);
+  }
+
+  confirmarComando(comandoId);
+}
+
+
+// =========================
 // SETUP
 // =========================
 
@@ -271,41 +341,6 @@ void setup() {
 
 void loop() {
 
-  char tecla = teclado.getKey();
-
-
-  // =========================
-  // TECLA 1
-  // =========================
-
-  if (tecla == '1') {
-
-    Serial.println("Tecla 1 - Motor 1");
-
-    // Garante motor 2 desligado
-    digitalWrite(ENABLE_MOTOR2, HIGH);
-
-    // Gira motor 1
-    girarMotor(ENABLE_MOTOR1);
-  }
-
-
-  // =========================
-  // TECLA 2
-  // =========================
-
-  if (tecla == '2') {
-
-    Serial.println("Tecla 2 - Motor 2");
-
-    // Garante motor 1 desligado
-    digitalWrite(ENABLE_MOTOR1, HIGH);
-
-    // Gira motor 2
-    girarMotor(ENABLE_MOTOR2);
-  }
-
-
   // =========================
   // VERIFICA WIFI
   // =========================
@@ -314,6 +349,12 @@ void loop() {
 
     // Wi-Fi conectado
     digitalWrite(LED_WIFI, HIGH);
+
+    unsigned long agora = millis();
+    if (agora - ultimaConsultaComandos >= INTERVALO_COMANDOS_MS) {
+      ultimaConsultaComandos = agora;
+      consultarComandos();
+    }
 
   } else {
 

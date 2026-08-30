@@ -12,6 +12,12 @@
       "migrations_dir": "migrations"
     }
   ],
+  "kv_namespaces": [
+    {
+      "binding": "PRODUCT_IMAGES",
+      "id": "846a420c20ad46708a075b723548373c"
+    }
+  ],
   "observability": {
     "enabled": true,
     "head_sampling_rate": 1
