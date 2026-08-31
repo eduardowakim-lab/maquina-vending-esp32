@@ -1,0 +1,79 @@
+name: Build ESP32 firmware
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'Blink/**'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Arduino CLI
+        uses: arduino/setup-arduino-cli@v2
+
+      - name: Install ESP32 core and WiFiManager
+        run: |
+          arduino-cli config init
+          arduino-cli core update-index
+          arduino-cli core install esp32:esp32
+          arduino-cli lib install "WiFiManager"
+
+      - name: Create private Arduino secrets header
+        env:
+          CHAVE_DISPOSITIVO: ${{ secrets.CHAVE_DISPOSITIVO }}
+        run: |
+          if [ -z "$CHAVE_DISPOSITIVO" ]; then
+            echo "Repository secret CHAVE_DISPOSITIVO is missing."
+            exit 1
+          fi
+          printf '#pragma once\nconst char* CHAVE_DISPOSITIVO = "%s";\n' "$CHAVE_DISPOSITIVO" > Blink/arduino_secrets.h
+
+      - name: Compile firmware
+        run: |
+          rm -rf build
+          mkdir -p build
+          arduino-cli compile --fqbn esp32:esp32:esp32 --output-dir build Blink
+
+      - name: Publish OTA files
+        run: |
+          BIN_FILE=$(find build -maxdepth 1 -type f -name '*.bin' ! -name '*bootloader*' ! -name '*partitions*' | head -n 1)
+          if [ -z "$BIN_FILE" ]; then
+            echo "Compiled application BIN was not found."
+            find build -maxdepth 1 -type f -print
+            exit 1
+          fi
+
+          VERSION=$(grep -E '^#define[[:space:]]+VERSAO_FIRMWARE[[:space:]]+[0-9]+' Blink/Blink.ino | awk '{print $3}' | head -n 1)
+          if [ -z "$VERSION" ]; then
+            echo "VERSAO_FIRMWARE was not found in Blink/Blink.ino."
+            exit 1
+          fi
+
+          mkdir -p ota
+          cp "$BIN_FILE" ota/firmware.bin
+          printf '%s\n' "$VERSION" > ota/version.txt
+
+      - name: Commit generated firmware
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add ota/firmware.bin ota/version.txt
+
+          if git diff --cached --quiet; then
+            echo "Firmware is already up to date."
+            exit 0
+          fi
+
+          VERSION=$(cat ota/version.txt)
+          git commit -m "Build OTA firmware v${VERSION}"
+          git push
