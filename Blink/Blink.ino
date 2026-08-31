@@ -10,7 +10,7 @@
 // =========================
 
 // Aumente este numero antes de compilar e publicar uma nova versao.
-#define VERSAO_FIRMWARE 2
+#define VERSAO_FIRMWARE 3
 
 const char* URL_VERSAO =
   "https://raw.githubusercontent.com/eduardowakim-lab/maquina-vending-esp32/main/ota/version.txt";
@@ -43,6 +43,12 @@ unsigned long ultimaConsultaComandos = 0;
 
 #define ENABLE_MOTOR1 21
 #define ENABLE_MOTOR2 13
+
+// NEMA 17 de 200 passos/volta.
+// 5000 us em HIGH + 5000 us em LOW = 10 ms por passo.
+// 200 passos levam ~2 s, equivalente a ~30 RPM.
+#define DELAY_PASSO_US 5000
+#define PASSOS_POR_VOLTA 200
 
 
 // =========================
@@ -125,7 +131,7 @@ void verificarAtualizacao() {
 
 
 // =========================
-// FUNÇÃO PARA GIRAR MOTOR
+// FUNCAO PARA GIRAR MOTOR
 // =========================
 
 void girarMotor(int enablePin) {
@@ -136,14 +142,14 @@ void girarMotor(int enablePin) {
   // Define o sentido
   digitalWrite(DIR_PIN, HIGH);
 
-  // 200 passos
-  for (int i = 0; i < 200; i++) {
+  // Uma volta completa a aproximadamente 30 RPM
+  for (int i = 0; i < PASSOS_POR_VOLTA; i++) {
 
     digitalWrite(STEP_PIN, HIGH);
-    delayMicroseconds(1000);
+    delayMicroseconds(DELAY_PASSO_US);
 
     digitalWrite(STEP_PIN, LOW);
-    delayMicroseconds(1000);
+    delayMicroseconds(DELAY_PASSO_US);
   }
 
   // Desliga o motor novamente
@@ -259,7 +265,7 @@ void setup() {
 
   pinMode(LED_WIFI, OUTPUT);
 
-  // Começa apagado
+  // Comeca apagado
   digitalWrite(LED_WIFI, LOW);
 
 
@@ -273,7 +279,7 @@ void setup() {
   pinMode(ENABLE_MOTOR1, OUTPUT);
   pinMode(ENABLE_MOTOR2, OUTPUT);
 
-  // Os dois motores começam desligados
+  // Os dois motores comecam desligados
   digitalWrite(ENABLE_MOTOR1, HIGH);
   digitalWrite(ENABLE_MOTOR2, HIGH);
 
@@ -289,10 +295,10 @@ void setup() {
   Serial.println("Tentando conectar ao Wi-Fi...");
 
   /*
-     Se já existir Wi-Fi salvo,
+     Se ja existir Wi-Fi salvo,
      conecta automaticamente.
 
-     Se não existir,
+     Se nao existir,
      cria a rede:
 
      Maquina-ESP32
@@ -303,7 +309,7 @@ void setup() {
 
 
   // -------------------------
-  // SE NÃO CONECTAR
+  // SE NAO CONECTAR
   // -------------------------
 
   if (!conectado) {
@@ -343,7 +349,7 @@ void loop() {
 
   // =========================
   // VERIFICA WIFI
-  // =========================
+// =========================
 
   if (WiFi.status() == WL_CONNECTED) {
 
