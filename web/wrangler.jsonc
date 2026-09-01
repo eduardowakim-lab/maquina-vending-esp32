@@ -4,6 +4,9 @@
   "main": "src/index.js",
   "compatibility_date": "2026-08-29",
   "compatibility_flags": ["nodejs_compat"],
+  "vars": {
+    "MERCADO_PAGO_PUBLIC_KEY": "APP_USR-6eacb72a-748c-42bf-a64c-979c16569ae9"
+  },
   "d1_databases": [
     {
       "binding": "DB",
