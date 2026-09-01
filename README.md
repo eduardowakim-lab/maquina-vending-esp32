@@ -15,6 +15,10 @@ clica em `Comprar agora`, a Cloudflare cria o checkout no Mercado Pago usando
 o preco atual salvo no admin, e o ESP32 so recebe o comando depois que o
 pagamento aprovado chega pelo webhook.
 
+Existe tambem o botao `Novo pagamento (teste)`, que usa Mercado Pago Payment
+Brick para manter Pix e cartao dentro da propria pagina. O checkout antigo
+continua disponivel durante os testes.
+
 ## Mercado Pago
 
 O admin altera nome, preco, foto e disponibilidade do produto. Nao e preciso
@@ -23,6 +27,7 @@ criar um link manual no Mercado Pago para cada preco.
 Configure estes secrets no Worker:
 
 - `MERCADO_PAGO_ACCESS_TOKEN`: access token da aplicacao Mercado Pago.
+- `MERCADO_PAGO_PUBLIC_KEY`: public key da mesma aplicacao; usada pelo Payment Brick no frontend.
 - `MERCADO_PAGO_WEBHOOK_SECRET`: chave do webhook gerada em Suas integracoes.
 
 URL do webhook para configurar no Mercado Pago:
@@ -54,8 +59,10 @@ Integracao GitHub/Cloudflare ativada em 30/08/2026 para deploy automatico.
 
 Atencao: secrets como `MERCADO_PAGO_ACCESS_TOKEN`,
 `MERCADO_PAGO_WEBHOOK_SECRET` e chaves do ESP32 nao devem ser colocados no
-GitHub. Eles ficam somente nas configuracoes da Cloudflare ou em arquivos
-locais ignorados pelo Git.
+GitHub. A `MERCADO_PAGO_PUBLIC_KEY` nao e secreta, mas foi mantida nas
+configuracoes do Worker para facilitar a troca entre ambientes. As chaves
+privadas ficam somente nas configuracoes da Cloudflare ou em arquivos locais
+ignorados pelo Git.
 
 ## Compilar e enviar ao ESP32
 
