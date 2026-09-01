@@ -13,20 +13,38 @@ const BRICK_CSP = [
   "frame-ancestors 'none'"
 ].join("; ");
 
+function promoteBrickCheckout(path, text) {
+  if (path === "/") {
+    return text.replace("<div class=\"brand\">NOVO PAGAMENTO</div>", "<div class=\"brand\">PAGAMENTO</div>");
+  }
+
+  if (path !== "/app.js") return text;
+
+  const oldButtons = 'const button=document.createElement("button");button.type="button";button.textContent="Comprar agora";button.addEventListener("click",()=>startCheckout(item,button));const newButton=document.createElement("button");newButton.type="button";newButton.className="new-payment";newButton.textContent="Novo pagamento (teste)";newButton.addEventListener("click",()=>startBrick(item,newButton));card.append(visual,title,price,button,newButton);container.append(card)';
+  const primaryButton = 'const button=document.createElement("button");button.type="button";button.textContent="Comprar agora";button.addEventListener("click",()=>startBrick(item,button));card.append(visual,title,price,button);container.append(card)';
+
+  return text.replace(oldButtons, primaryButton);
+}
+
 export default {
   async fetch(request, env, ctx) {
     const response = await app.fetch(request, env, ctx);
     const headers = new Headers(response.headers);
+    const path = new URL(request.url).pathname;
 
-    // Payment Brick loads scripts, styles, fonts, frames and telemetry from
-    // Mercado Pago / Mercado Libre CDN domains. The original CSP was too strict
-    // and allowed the shell to open while the actual payment form stayed blank.
     headers.set("Content-Security-Policy", BRICK_CSP);
 
-    // Avoid mixing a new app.js with an older cached styles.css on mobile.
-    const path = new URL(request.url).pathname;
     if (path === "/" || path === "/styles.css" || path === "/app.js") {
       headers.set("Cache-Control", "no-store, max-age=0");
+    }
+
+    if ((path === "/" || path === "/app.js") && response.ok) {
+      const text = await response.text();
+      return new Response(promoteBrickCheckout(path, text), {
+        status: response.status,
+        statusText: response.statusText,
+        headers
+      });
     }
 
     return new Response(response.body, {
