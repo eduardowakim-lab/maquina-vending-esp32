@@ -3,6 +3,7 @@
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
 #include <HTTPUpdate.h>
+#include <Preferences.h>
 #include "arduino_secrets.h"
 
 // =========================
@@ -23,7 +24,12 @@ const char* URL_CONCLUIR_COMANDO =
   "https://maquina-vending.eduardo-wakim.workers.dev/api/device/commands/";
 
 const unsigned long INTERVALO_COMANDOS_MS = 2000;
+const unsigned long RETRY_CONFIRMACAO_MS = 500;
+const int MAX_TENTATIVAS_CONFIRMACAO = 3;
 unsigned long ultimaConsultaComandos = 0;
+
+Preferences preferencias;
+long ultimoComandoExecutado = 0;
 
 // A atualizacao e consultada somente quando o ESP32 liga ou reinicia.
 
@@ -161,28 +167,58 @@ void girarMotor(int enablePin) {
 // COMANDOS RECEBIDOS DO SITE
 // =========================
 
-void confirmarComando(long comandoId) {
+bool confirmarComandoUmaVez(long comandoId) {
+
+  if (WiFi.status() != WL_CONNECTED) {
+    return false;
+  }
 
   WiFiClientSecure cliente;
   cliente.setInsecure();
 
   HTTPClient http;
-  http.setConnectTimeout(5000);
-  http.setTimeout(5000);
+  http.setConnectTimeout(3000);
+  http.setTimeout(3000);
 
   String url = String(URL_CONCLUIR_COMANDO) + comandoId +
                "/complete?device_id=machine-1";
 
   if (!http.begin(cliente, url)) {
-    Serial.println("Nao foi possivel confirmar o comando.");
-    return;
+    Serial.println("Nao foi possivel iniciar a confirmacao do comando.");
+    return false;
   }
 
   http.addHeader("X-Device-Key", CHAVE_DISPOSITIVO);
   http.addHeader("Content-Type", "text/plain");
   int codigoHttp = http.POST("");
-  Serial.printf("Confirmacao do comando %ld: HTTP %d\n", comandoId, codigoHttp);
   http.end();
+
+  Serial.printf("Confirmacao do comando %ld: HTTP %d\n", comandoId, codigoHttp);
+
+  // 200 = confirmou agora. 404 pode significar que o servidor ja nao considera
+  // o comando claimed; nesse caso mantemos o ID salvo para evitar giro duplicado.
+  return codigoHttp >= 200 && codigoHttp < 300;
+}
+
+bool confirmarComando(long comandoId) {
+  for (int tentativa = 1; tentativa <= MAX_TENTATIVAS_CONFIRMACAO; tentativa++) {
+    if (confirmarComandoUmaVez(comandoId)) {
+      return true;
+    }
+
+    Serial.printf("Falha ao confirmar comando %ld. Tentativa %d/%d.\n",
+                  comandoId, tentativa, MAX_TENTATIVAS_CONFIRMACAO);
+
+    if (tentativa < MAX_TENTATIVAS_CONFIRMACAO) {
+      delay(RETRY_CONFIRMACAO_MS);
+    }
+  }
+  return false;
+}
+
+void registrarComandoExecutado(long comandoId) {
+  ultimoComandoExecutado = comandoId;
+  preferencias.putLong("ultimo_cmd", comandoId);
 }
 
 void consultarComandos() {
@@ -191,12 +227,14 @@ void consultarComandos() {
     return;
   }
 
+  unsigned long inicioConsulta = millis();
+
   WiFiClientSecure cliente;
   cliente.setInsecure();
 
   HTTPClient http;
-  http.setConnectTimeout(5000);
-  http.setTimeout(5000);
+  http.setConnectTimeout(3000);
+  http.setTimeout(3000);
 
   if (!http.begin(cliente, URL_COMANDOS)) {
     Serial.println("Nao foi possivel consultar comandos.");
@@ -205,14 +243,19 @@ void consultarComandos() {
 
   http.addHeader("X-Device-Key", CHAVE_DISPOSITIVO);
   int codigoHttp = http.GET();
+  unsigned long duracaoConsulta = millis() - inicioConsulta;
 
   if (codigoHttp == HTTP_CODE_NO_CONTENT) {
     http.end();
+    if (duracaoConsulta > 2500) {
+      Serial.printf("Consulta sem comando demorou %lu ms.\n", duracaoConsulta);
+    }
     return;
   }
 
   if (codigoHttp != HTTP_CODE_OK) {
-    Serial.printf("Falha ao consultar comandos. HTTP: %d\n", codigoHttp);
+    Serial.printf("Falha ao consultar comandos. HTTP: %d. Tempo: %lu ms.\n",
+                  codigoHttp, duracaoConsulta);
     http.end();
     return;
   }
@@ -235,18 +278,41 @@ void consultarComandos() {
     return;
   }
 
-  Serial.printf("Site solicitou o motor %d. Comando %ld.\n", motor, comandoId);
+  Serial.printf("Comando %ld recebido para motor %d em %lu ms.\n",
+                comandoId, motor, duracaoConsulta);
+
+  // Protecao para uma futura politica de retry no servidor/MQTT:
+  // se o mesmo comando reaparecer apos o motor ja ter girado, NAO gira novamente.
+  // Apenas tenta reenviar a confirmacao.
+  if (comandoId == ultimoComandoExecutado) {
+    Serial.printf("Comando %ld ja foi executado. Reenviando apenas confirmacao.\n", comandoId);
+    confirmarComando(comandoId);
+    return;
+  }
 
   digitalWrite(ENABLE_MOTOR1, HIGH);
   digitalWrite(ENABLE_MOTOR2, HIGH);
 
+  unsigned long inicioMotor = millis();
   if (motor == 1) {
     girarMotor(ENABLE_MOTOR1);
   } else {
     girarMotor(ENABLE_MOTOR2);
   }
+  unsigned long duracaoMotor = millis() - inicioMotor;
 
-  confirmarComando(comandoId);
+  // O ID e salvo na memoria nao volatil ANTES de falar com o servidor.
+  // Assim, se o motor girou e a internet cair durante a confirmacao, o ESP
+  // lembra apos reiniciar e evita executar novamente o mesmo comando.
+  registrarComandoExecutado(comandoId);
+
+  Serial.printf("Motor %d concluiu comando %ld em %lu ms.\n",
+                motor, comandoId, duracaoMotor);
+
+  if (!confirmarComando(comandoId)) {
+    Serial.printf("ATENCAO: motor girou, mas comando %ld ainda nao foi confirmado ao servidor.\n",
+                  comandoId);
+  }
 }
 
 
@@ -257,6 +323,12 @@ void consultarComandos() {
 void setup() {
 
   Serial.begin(115200);
+
+  // Guarda somente o ultimo ID executado. Nao muda configuracao de Wi-Fi
+  // nem qualquer outro comportamento existente.
+  preferencias.begin("vending", false);
+  ultimoComandoExecutado = preferencias.getLong("ultimo_cmd", 0);
+  Serial.printf("Ultimo comando executado salvo: %ld\n", ultimoComandoExecutado);
 
 
   // -------------------------
