@@ -1,0 +1,39 @@
+name: Validate ESP32 firmware
+
+on:
+  push:
+    branches: [improve-command-reliability]
+    paths:
+      - 'Blink/**'
+      - '.github/workflows/validate-firmware.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compile:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Arduino CLI
+        uses: arduino/setup-arduino-cli@v2
+
+      - name: Install ESP32 core and WiFiManager
+        run: |
+          arduino-cli config init
+          arduino-cli core update-index
+          arduino-cli core install esp32:esp32
+          arduino-cli lib install "WiFiManager"
+
+      - name: Create compile-only Arduino secrets header
+        run: |
+          printf '#pragma once\nconst char* CHAVE_DISPOSITIVO = "compile-only-placeholder-key-1234567890";\n' > Blink/arduino_secrets.h
+
+      - name: Compile firmware
+        run: |
+          rm -rf build
+          mkdir -p build
+          arduino-cli compile --fqbn esp32:esp32:esp32 --output-dir build Blink
