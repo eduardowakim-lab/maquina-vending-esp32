@@ -51,9 +51,12 @@ long ultimoComandoExecutado = 0;
 #define ENABLE_MOTOR2 13
 
 // NEMA 17 de 200 passos/volta.
-// 5000 us em HIGH + 5000 us em LOW = 10 ms por passo.
-// 200 passos levam ~2 s, equivalente a ~30 RPM.
-#define DELAY_PASSO_US 5000
+// Velocidade final mantida em aproximadamente 30 RPM.
+// A partida agora usa rampa de aceleracao para reduzir perda de passos
+// quando a mola estiver com carga maior.
+#define DELAY_PASSO_FINAL_US 5000
+#define DELAY_PASSO_INICIAL_US 9000
+#define PASSOS_RAMPA 50
 #define PASSOS_POR_VOLTA 200
 
 
@@ -145,17 +148,30 @@ void girarMotor(int enablePin) {
   // Habilita somente o motor escolhido
   digitalWrite(enablePin, LOW);
 
+  // Pequena pausa para o driver/motor estabilizar antes do primeiro passo.
+  delay(20);
+
   // Define o sentido
   digitalWrite(DIR_PIN, HIGH);
 
-  // Uma volta completa a aproximadamente 30 RPM
+  // Uma volta completa com rampa suave nos primeiros passos.
+  // Comeca mais devagar para aumentar a margem contra perda de passos
+  // e vai acelerando ate a velocidade final ja usada pela maquina.
   for (int i = 0; i < PASSOS_POR_VOLTA; i++) {
 
+    int delayPassoUs = DELAY_PASSO_FINAL_US;
+
+    if (i < PASSOS_RAMPA) {
+      long diferenca = DELAY_PASSO_INICIAL_US - DELAY_PASSO_FINAL_US;
+      delayPassoUs = DELAY_PASSO_INICIAL_US -
+                     ((long)i * diferenca / PASSOS_RAMPA);
+    }
+
     digitalWrite(STEP_PIN, HIGH);
-    delayMicroseconds(DELAY_PASSO_US);
+    delayMicroseconds(delayPassoUs);
 
     digitalWrite(STEP_PIN, LOW);
-    delayMicroseconds(DELAY_PASSO_US);
+    delayMicroseconds(delayPassoUs);
   }
 
   // Desliga o motor novamente
