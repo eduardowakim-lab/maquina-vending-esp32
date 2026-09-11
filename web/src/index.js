@@ -84,7 +84,7 @@ async function route(request, env) {
     const session = await requireAdmin(request, env);
     return updatePassword(request, env, session);
   }
-  const testMatch = path.match(/^\/api\/admin\/products\/(1|2)\/test$/);
+  const testMatch = path.match(/^\/api\/admin\/products\/(1|2|3)\/test$/);
   if (testMatch && request.method === "POST") {
     requireSameOrigin(request);
     await requireAdmin(request, env);
@@ -97,7 +97,7 @@ async function route(request, env) {
   if (completeMatch && request.method === "POST") {
     return completeDeviceCommand(request, env, url.searchParams.get("device_id") || "", Number(completeMatch[1]));
   }
-  const imageMatch = path.match(/^\/api\/admin\/products\/(1|2)\/image$/);
+  const imageMatch = path.match(/^\/api\/admin\/products\/(1|2|3)\/image$/);
   if (imageMatch && request.method === "POST") {
     requireSameOrigin(request);
     await requireAdmin(request, env);
@@ -119,7 +119,7 @@ async function createCheckout(request, env) {
 
   const body = await readJson(request);
   const productId = Number(body.product_id);
-  if (![1, 2].includes(productId)) throw new HttpError(400, "Produto invalido.");
+  if (![1, 2, 3].includes(productId)) throw new HttpError(400, "Produto invalido.");
 
   const product = await env.DB.prepare(
     "SELECT id, name, price_cents, image_key FROM products WHERE id = ? AND enabled = 1"
@@ -153,7 +153,7 @@ async function createBrickSession(request, env) {
 
   const body = await readJson(request);
   const productId = Number(body.product_id);
-  if (![1, 2].includes(productId)) throw new HttpError(400, "Produto invalido.");
+  if (![1, 2, 3].includes(productId)) throw new HttpError(400, "Produto invalido.");
 
   const product = await env.DB.prepare(
     "SELECT id, name, price_cents FROM products WHERE id = ? AND enabled = 1"
@@ -468,7 +468,7 @@ async function getProductImage(path, env) {
   } catch {
     return new Response(null, { status: 404, headers: SECURITY_HEADERS });
   }
-  if (!/^product-(1|2)-[a-f0-9-]+\.(jpg|png|webp)$/.test(key)) {
+  if (!/^product-(1|2|3)-[a-f0-9-]+\.(jpg|png|webp)$/.test(key)) {
     return new Response(null, { status: 404, headers: SECURITY_HEADERS });
   }
   const object = await env.PRODUCT_IMAGES.get(key, "stream");
@@ -601,8 +601,8 @@ async function requireAdmin(request, env) {
 
 async function updateProducts(request, env) {
   const body = await readJson(request);
-  if (!Array.isArray(body.products) || body.products.length !== 2) {
-    return json({ error: "Envie exatamente dois produtos." }, 400);
+  if (!Array.isArray(body.products) || body.products.length !== 3) {
+    return json({ error: "Envie exatamente tres produtos." }, 400);
   }
 
   const seen = new Set();
@@ -613,7 +613,7 @@ async function updateProducts(request, env) {
     const priceCents = Number(product.price_cents);
     const enabled = product.enabled === true ? 1 : 0;
 
-    if (![1, 2].includes(id) || seen.has(id)) return json({ error: "Produto invalido." }, 400);
+    if (![1, 2, 3].includes(id) || seen.has(id)) return json({ error: "Produto invalido." }, 400);
     if (name.length < 1 || name.length > 60) return json({ error: "Nome deve ter entre 1 e 60 caracteres." }, 400);
     if (!Number.isInteger(priceCents) || priceCents < 1 || priceCents > 1000000) {
       return json({ error: "Preco invalido." }, 400);
