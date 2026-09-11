@@ -11,7 +11,7 @@
 // =========================
 
 // Aumente este numero antes de compilar e publicar uma nova versao.
-#define VERSAO_FIRMWARE 5
+#define VERSAO_FIRMWARE 6
 
 const char* URL_VERSAO =
   "https://raw.githubusercontent.com/eduardowakim-lab/maquina-vending-esp32/main/ota/version.txt";
@@ -49,6 +49,7 @@ long ultimoComandoExecutado = 0;
 
 #define ENABLE_MOTOR1 21
 #define ENABLE_MOTOR2 13
+#define ENABLE_MOTOR3 12
 
 // NEMA 17 de 200 passos/volta.
 // Velocidade final mantida em aproximadamente 30 RPM.
@@ -110,6 +111,7 @@ void verificarAtualizacao() {
   // Garante que nenhum motor fique energizado durante a gravacao.
   digitalWrite(ENABLE_MOTOR1, HIGH);
   digitalWrite(ENABLE_MOTOR2, HIGH);
+  digitalWrite(ENABLE_MOTOR3, HIGH);
 
   WiFiClientSecure clienteFirmware;
   clienteFirmware.setInsecure();
@@ -289,7 +291,7 @@ void consultarComandos() {
   long comandoId = comando.substring(0, separador).toInt();
   int motor = comando.substring(separador + 1).toInt();
 
-  if (comandoId <= 0 || (motor != 1 && motor != 2)) {
+  if (comandoId <= 0 || (motor != 1 && motor != 2 && motor != 3)) {
     Serial.println("Comando recebido com valores invalidos.");
     return;
   }
@@ -308,12 +310,15 @@ void consultarComandos() {
 
   digitalWrite(ENABLE_MOTOR1, HIGH);
   digitalWrite(ENABLE_MOTOR2, HIGH);
+  digitalWrite(ENABLE_MOTOR3, HIGH);
 
   unsigned long inicioMotor = millis();
   if (motor == 1) {
     girarMotor(ENABLE_MOTOR1);
-  } else {
+  } else if (motor == 2) {
     girarMotor(ENABLE_MOTOR2);
+  } else {
+    girarMotor(ENABLE_MOTOR3);
   }
   unsigned long duracaoMotor = millis() - inicioMotor;
 
@@ -366,10 +371,12 @@ void setup() {
 
   pinMode(ENABLE_MOTOR1, OUTPUT);
   pinMode(ENABLE_MOTOR2, OUTPUT);
+  pinMode(ENABLE_MOTOR3, OUTPUT);
 
-  // Os dois motores comecam desligados
+  // Os tres motores comecam desligados
   digitalWrite(ENABLE_MOTOR1, HIGH);
   digitalWrite(ENABLE_MOTOR2, HIGH);
+  digitalWrite(ENABLE_MOTOR3, HIGH);
 
   digitalWrite(STEP_PIN, LOW);
 
