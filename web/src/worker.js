@@ -73,7 +73,7 @@ async function adminSales(request, env) {
   }
 
   const productsResult = await env.DB.prepare(
-    "SELECT id, name FROM products WHERE id IN (1,2,3) ORDER BY id"
+    "SELECT id, name FROM products WHERE id IN (1,2,3,4) ORDER BY id"
   ).all();
   const salesResult = await env.DB.prepare(
     "SELECT product_id AS motor, COUNT(*) AS sales, COALESCE(SUM(price_cents),0) AS revenue_cents FROM payment_orders WHERE paid_at IS NOT NULL AND paid_at BETWEEN ? AND ? GROUP BY product_id ORDER BY product_id"

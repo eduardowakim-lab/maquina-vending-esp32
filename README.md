@@ -1,7 +1,10 @@
 # Maquina de vendas ESP32
 
-Firmware e pagina web da maquina de vendas com dois motores, Wi-Fi configurado
+Firmware e pagina web da maquina de vendas com quatro motores, Wi-Fi configurado
 por WiFiManager e atualizacao automatica OTA pelo GitHub.
+
+Os quatro drivers A4988 compartilham `STEP` no GPIO 18 e `DIR` no GPIO 19.
+Os pinos `ENABLE` dos motores 1 a 4 sao, respectivamente, GPIO 21, 13, 12 e 14.
 
 ## Controle pelo site
 

@@ -2,6 +2,7 @@
 const LOGIN_WINDOW_SECONDS = 15 * 60;
 const LOGIN_MAX_ATTEMPTS = 10;
 const MAX_IMAGE_BYTES = 2 * 1024 * 1024;
+const MAX_PRODUCT_ID = 4;
 const PUBLIC_BASE_URL = "https://maquina-vending.eduardo-wakim.workers.dev";
 const MERCADO_PAGO_PREFERENCES_URL = "https://api.mercadopago.com/checkout/preferences";
 const MERCADO_PAGO_PAYMENTS_URL = "https://api.mercadopago.com/v1/payments";
@@ -153,7 +154,7 @@ async function createBrickSession(request, env) {
 
   const body = await readJson(request);
   const productId = Number(body.product_id);
-  if (![1, 2, 3].includes(productId)) throw new HttpError(400, "Produto invalido.");
+  if (!isValidProductId(productId)) throw new HttpError(400, "Produto invalido.");
 
   const product = await env.DB.prepare(
     "SELECT id, name, price_cents FROM products WHERE id = ? AND enabled = 1"
@@ -389,6 +390,7 @@ async function enqueuePaidCommand(env, deviceId, motor, now) {
 }
 
 async function createTestCommand(env, motor) {
+  if (!isValidProductId(motor)) throw new HttpError(400, "Motor invalido.");
   const deviceId = "machine-1";
   const now = Math.floor(Date.now() / 1000);
   await env.DB.prepare(
@@ -603,8 +605,8 @@ async function requireAdmin(request, env) {
 
 async function updateProducts(request, env) {
   const body = await readJson(request);
-  if (!Array.isArray(body.products) || body.products.length < 1 || body.products.length > 20) {
-    return json({ error: "Envie entre 1 e 20 produtos." }, 400);
+  if (!Array.isArray(body.products) || body.products.length < 1 || body.products.length > MAX_PRODUCT_ID) {
+    return json({ error: `Envie entre 1 e ${MAX_PRODUCT_ID} produtos.` }, 400);
   }
 
   const seen = new Set();
@@ -631,7 +633,7 @@ async function updateProducts(request, env) {
 }
 
 function isValidProductId(id) {
-  return Number.isInteger(id) && id >= 1 && id <= 20;
+  return Number.isInteger(id) && id >= 1 && id <= MAX_PRODUCT_ID;
 }
 
 async function updatePassword(request, env, session) {
