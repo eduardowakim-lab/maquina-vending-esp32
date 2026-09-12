@@ -12,7 +12,7 @@
 // =========================
 
 // Aumente este numero antes de compilar e publicar uma nova versao.
-#define VERSAO_FIRMWARE 10
+#define VERSAO_FIRMWARE 11
 
 const char* URL_VERSAO =
   "https://raw.githubusercontent.com/eduardowakim-lab/maquina-vending-esp32/main/ota/version.txt";
@@ -284,16 +284,16 @@ void registrarComandoExecutado(long comandoId) {
   preferencias.putLong("ultimo_cmd", comandoId);
 }
 
-void publicarAckMqtt(long comandoId, int motor, const char* status) {
+bool publicarAckMqtt(long comandoId, int motor, const char* status) {
   if (!clienteMqtt.connected()) {
-    return;
+    return false;
   }
 
   char payload[160];
   snprintf(payload, sizeof(payload),
            "{\"commandId\":%ld,\"motor\":%d,\"status\":\"%s\",\"deviceId\":\"machine-1\"}",
            comandoId, motor, status);
-  clienteMqtt.publish(MQTT_TOPICO_ACK, payload, false);
+  return clienteMqtt.publish(MQTT_TOPICO_ACK, payload, false);
 }
 
 void executarComando(long comandoId, int motor, const char* transporte) {
@@ -307,8 +307,9 @@ void executarComando(long comandoId, int motor, const char* transporte) {
 
   if (comandoId == ultimoComandoExecutado) {
     Serial.printf("Comando %ld ja foi executado. Reenviando confirmacoes.\n", comandoId);
-    publicarAckMqtt(comandoId, motor, "completed");
-    confirmarComando(comandoId);
+    if (!publicarAckMqtt(comandoId, motor, "completed")) {
+      confirmarComando(comandoId);
+    }
     return;
   }
 
@@ -332,8 +333,8 @@ void executarComando(long comandoId, int motor, const char* transporte) {
   Serial.printf("Motor %d concluiu comando %ld em %lu ms.\n",
                 motor, comandoId, millis() - inicioMotor);
 
-  publicarAckMqtt(comandoId, motor, "completed");
-  if (!confirmarComando(comandoId)) {
+  bool ackMqttEnviado = publicarAckMqtt(comandoId, motor, "completed");
+  if (!ackMqttEnviado && !confirmarComando(comandoId)) {
     Serial.printf("ATENCAO: comando %ld executado, mas a confirmacao HTTP falhou.\n",
                   comandoId);
   }

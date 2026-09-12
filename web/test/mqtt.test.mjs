@@ -79,3 +79,9 @@ test("stale test cleanup never expires a paid command", async () => {
   const source = await readFile(new URL("../src/index.js", import.meta.url), "utf8");
   assert.match(source, /NOT EXISTS \(SELECT 1 FROM payment_orders WHERE payment_orders\.device_command_id = device_commands\.id\)/);
 });
+
+test("firmware avoids opening HTTP TLS when MQTT ACK was sent", async () => {
+  const source = await readFile(new URL("../../Blink/Blink.ino", import.meta.url), "utf8");
+  assert.match(source, /if \(!ackMqttEnviado && !confirmarComando\(comandoId\)\)/);
+  assert.match(source, /bool publicarAckMqtt/);
+});
