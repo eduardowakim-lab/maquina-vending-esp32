@@ -12,7 +12,7 @@
 // =========================
 
 // Aumente este numero antes de compilar e publicar uma nova versao.
-#define VERSAO_FIRMWARE 9
+#define VERSAO_FIRMWARE 10
 
 const char* URL_VERSAO =
   "https://raw.githubusercontent.com/eduardowakim-lab/maquina-vending-esp32/main/ota/version.txt";
@@ -25,7 +25,7 @@ const char* URL_CONCLUIR_COMANDO =
   "https://maquina-vending.eduardo-wakim.workers.dev/api/device/commands/";
 
 const unsigned long INTERVALO_COMANDOS_FALLBACK_MS = 3000;
-const unsigned long ATRASO_ATIVAR_FALLBACK_MS = 30000;
+const unsigned long ATRASO_ATIVAR_FALLBACK_MS = 10000;
 const unsigned long MQTT_RETRY_MAX_MS = 30000;
 const unsigned long RETRY_CONFIRMACAO_MS = 500;
 const int MAX_TENTATIVAS_CONFIRMACAO = 3;
@@ -384,7 +384,7 @@ bool conectarMqtt() {
     1,
     true,
     offline,
-    true
+    false
   );
 
   if (!conectado) {

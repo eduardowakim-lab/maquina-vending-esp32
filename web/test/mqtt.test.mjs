@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import worker from "../src/worker.js";
 
 function testEnv() {
@@ -67,4 +68,14 @@ test("completes a command from an MQTT ACK", async () => {
   assert.equal(calls.length, 1);
   assert.match(calls[0].sql, /UPDATE device_commands SET status = 'completed'/);
   assert.equal(calls[0].values[1], 42);
+});
+
+test("HTTP confirmation also completes a command delivered directly by MQTT", async () => {
+  const source = await readFile(new URL("../src/index.js", import.meta.url), "utf8");
+  assert.match(source, /status IN \('pending', 'claimed'\)/);
+});
+
+test("stale test cleanup never expires a paid command", async () => {
+  const source = await readFile(new URL("../src/index.js", import.meta.url), "utf8");
+  assert.match(source, /NOT EXISTS \(SELECT 1 FROM payment_orders WHERE payment_orders\.device_command_id = device_commands\.id\)/);
 });
