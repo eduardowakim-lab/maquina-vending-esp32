@@ -4,6 +4,7 @@
 #include <HTTPClient.h>
 #include <HTTPUpdate.h>
 #include <Preferences.h>
+#include <PubSubClient.h>
 #include "arduino_secrets.h"
 
 // =========================
@@ -11,7 +12,7 @@
 // =========================
 
 // Aumente este numero antes de compilar e publicar uma nova versao.
-#define VERSAO_FIRMWARE 8
+#define VERSAO_FIRMWARE 9
 
 const char* URL_VERSAO =
   "https://raw.githubusercontent.com/eduardowakim-lab/maquina-vending-esp32/main/ota/version.txt";
@@ -23,10 +24,51 @@ const char* URL_COMANDOS =
 const char* URL_CONCLUIR_COMANDO =
   "https://maquina-vending.eduardo-wakim.workers.dev/api/device/commands/";
 
-const unsigned long INTERVALO_COMANDOS_MS = 2000;
+const unsigned long INTERVALO_COMANDOS_FALLBACK_MS = 3000;
+const unsigned long ATRASO_ATIVAR_FALLBACK_MS = 30000;
+const unsigned long MQTT_RETRY_MAX_MS = 30000;
 const unsigned long RETRY_CONFIRMACAO_MS = 500;
 const int MAX_TENTATIVAS_CONFIRMACAO = 3;
 unsigned long ultimaConsultaComandos = 0;
+unsigned long mqttDesconectadoDesde = 0;
+unsigned long proximaTentativaMqtt = 0;
+unsigned long atrasoRetryMqtt = 2000;
+unsigned long ultimoHeartbeatMqtt = 0;
+
+const char* MQTT_HOST = "bd41a618.ala.us-east-1.emqxsl.com";
+const uint16_t MQTT_PORT = 8883;
+const char* MQTT_CLIENT_ID = "machine-001";
+const char* MQTT_TOPICO_COMANDOS = "vending/machine-001/down/command";
+const char* MQTT_TOPICO_STATUS = "vending/machine-001/up/status";
+const char* MQTT_TOPICO_ACK = "vending/machine-001/up/ack";
+
+static const char MQTT_CA_CERT[] PROGMEM = R"EOF(
+-----BEGIN CERTIFICATE-----
+MIIDjjCCAnagAwIBAgIQAzrx5qcRqaC7KGSxHQn65TANBgkqhkiG9w0BAQsFADBh
+MQswCQYDVQQGEwJVUzEVMBMGA1UEChMMRGlnaUNlcnQgSW5jMRkwFwYDVQQLExB3
+d3cuZGlnaWNlcnQuY29tMSAwHgYDVQQDExdEaWdpQ2VydCBHbG9iYWwgUm9vdCBH
+MjAeFw0xMzA4MDExMjAwMDBaFw0zODAxMTUxMjAwMDBaMGExCzAJBgNVBAYTAlVT
+MRUwEwYDVQQKEwxEaWdpQ2VydCBJbmMxGTAXBgNVBAsTEHd3dy5kaWdpY2VydC5j
+b20xIDAeBgNVBAMTF0RpZ2lDZXJ0IEdsb2JhbCBSb290IEcyMIIBIjANBgkqhkiG
+9w0BAQEFAAOCAQ8AMIIBCgKCAQEAuzfNNNx7a8myaJCtSnX/RrohCgiN9RlUyfuI
+2/Ou8jqJkTx65qsGGmvPrC3oXgkkRLpimn7Wo6h+4FR1IAWsULecYxpsMNzaHxmx
+1x7e/dfgy5SDN67sH0NO3Xss0r0upS/kqbitOtSZpLYl6ZtrAGCSYP9PIUkY92eQ
+q2EGnI/yuum06ZIya7XzV+hdG82MHauVBJVJ8zUtluNJbd134/tJS7SsVQepj5Wz
+tCO7TG1F8PapspUwtP1MVYwnSlcUfIKdzXOS0xZKBgyMUNGPHgm+F6HmIcr9g+UQ
+vIOlCsRnKPZzFBQ9RnbDhxSJITRNrw9FDKZJobq7nMWxM4MphQIDAQABo0IwQDAP
+BgNVHRMBAf8EBTADAQH/MA4GA1UdDwEB/wQEAwIBhjAdBgNVHQ4EFgQUTiJUIBiV
+5uNu5g/6+rkS7QYXjzkwDQYJKoZIhvcNAQELBQADggEBAGBnKJRvDkhj6zHd6mcY
+1Yl9PMWLSn/pvtsrF9+wX3N3KjITOYFnQoQj8kVnNeyIv/iPsGEMNKSuIEyExtv4
+NeF22d+mQrvHRAiGfzZ0JFrabA0UWTW98kndth/Jsw1HKj2ZL7tcu7XUIOGZX1NG
+Fdtom/DzMNU+MeKNhJ7jitralj41E6Vf8PlwUHBHQRFXGU7Aj64GxJUTFy8bJZ91
+8rGOmaFvE7FBcf6IKshPECBV1/MUReXgRPTqh5Uykw7+U0b6LJ3/iyK5S9kJRaTe
+pLiaWN0bfVKfjllDiIGknibVb63dDcY3fe0Dkhvld1927jyNxF1WW6LZZm6zNTfl
+MrY=
+-----END CERTIFICATE-----
+)EOF";
+
+WiFiClientSecure clienteMqttTls;
+PubSubClient clienteMqtt(clienteMqttTls);
 
 Preferences preferencias;
 long ultimoComandoExecutado = 0;
@@ -242,6 +284,164 @@ void registrarComandoExecutado(long comandoId) {
   preferencias.putLong("ultimo_cmd", comandoId);
 }
 
+void publicarAckMqtt(long comandoId, int motor, const char* status) {
+  if (!clienteMqtt.connected()) {
+    return;
+  }
+
+  char payload[160];
+  snprintf(payload, sizeof(payload),
+           "{\"commandId\":%ld,\"motor\":%d,\"status\":\"%s\",\"deviceId\":\"machine-1\"}",
+           comandoId, motor, status);
+  clienteMqtt.publish(MQTT_TOPICO_ACK, payload, false);
+}
+
+void executarComando(long comandoId, int motor, const char* transporte) {
+  if (comandoId <= 0 || motor < 1 || motor > 4) {
+    Serial.println("Comando recebido com valores invalidos.");
+    return;
+  }
+
+  Serial.printf("Comando %ld recebido para motor %d via %s.\n",
+                comandoId, motor, transporte);
+
+  if (comandoId == ultimoComandoExecutado) {
+    Serial.printf("Comando %ld ja foi executado. Reenviando confirmacoes.\n", comandoId);
+    publicarAckMqtt(comandoId, motor, "completed");
+    confirmarComando(comandoId);
+    return;
+  }
+
+  digitalWrite(ENABLE_MOTOR1, HIGH);
+  digitalWrite(ENABLE_MOTOR2, HIGH);
+  digitalWrite(ENABLE_MOTOR3, HIGH);
+  digitalWrite(ENABLE_MOTOR4, HIGH);
+
+  unsigned long inicioMotor = millis();
+  if (motor == 1) {
+    girarMotor(ENABLE_MOTOR1);
+  } else if (motor == 2) {
+    girarMotor(ENABLE_MOTOR2);
+  } else if (motor == 3) {
+    girarMotor(ENABLE_MOTOR3);
+  } else {
+    girarMotor(ENABLE_MOTOR4);
+  }
+
+  registrarComandoExecutado(comandoId);
+  Serial.printf("Motor %d concluiu comando %ld em %lu ms.\n",
+                motor, comandoId, millis() - inicioMotor);
+
+  publicarAckMqtt(comandoId, motor, "completed");
+  if (!confirmarComando(comandoId)) {
+    Serial.printf("ATENCAO: comando %ld executado, mas a confirmacao HTTP falhou.\n",
+                  comandoId);
+  }
+}
+
+void aoReceberMqtt(char* topico, byte* bytes, unsigned int tamanho) {
+  if (strcmp(topico, MQTT_TOPICO_COMANDOS) != 0 || tamanho == 0 || tamanho >= 80) {
+    return;
+  }
+
+  char payload[80];
+  memcpy(payload, bytes, tamanho);
+  payload[tamanho] = '\0';
+
+  char* separador = strchr(payload, ',');
+  if (!separador) {
+    Serial.println("Payload MQTT de comando invalido.");
+    return;
+  }
+
+  *separador = '\0';
+  long comandoId = atol(payload);
+  int motor = atoi(separador + 1);
+  executarComando(comandoId, motor, "mqtt");
+}
+
+void publicarStatusMqtt(const char* status) {
+  char payload[160];
+  snprintf(payload, sizeof(payload),
+           "{\"status\":\"%s\",\"deviceId\":\"machine-1\",\"mqttClientId\":\"machine-001\",\"firmwareVersion\":%d}",
+           status, VERSAO_FIRMWARE);
+  clienteMqtt.publish(MQTT_TOPICO_STATUS, payload, true);
+}
+
+bool conectarMqtt() {
+  if (WiFi.status() != WL_CONNECTED) {
+    return false;
+  }
+
+  const char* offline = "{\"status\":\"offline\",\"deviceId\":\"machine-1\",\"mqttClientId\":\"machine-001\"}";
+  Serial.println("Tentando conectar ao MQTT com TLS...");
+
+  bool conectado = clienteMqtt.connect(
+    MQTT_CLIENT_ID,
+    MQTT_USUARIO,
+    MQTT_SENHA,
+    MQTT_TOPICO_STATUS,
+    1,
+    true,
+    offline,
+    true
+  );
+
+  if (!conectado) {
+    Serial.printf("MQTT indisponivel. Estado: %d\n", clienteMqtt.state());
+    return false;
+  }
+
+  if (!clienteMqtt.subscribe(MQTT_TOPICO_COMANDOS, 1)) {
+    Serial.println("Falha ao assinar topico de comandos MQTT.");
+    clienteMqtt.disconnect();
+    return false;
+  }
+
+  publicarStatusMqtt("online");
+  ultimoHeartbeatMqtt = millis();
+  mqttDesconectadoDesde = 0;
+  atrasoRetryMqtt = 2000;
+  Serial.println("MQTT conectado e aguardando comandos.");
+
+  // Sincroniza uma unica vez para recuperar comando criado enquanto a maquina
+  // estava offline. Depois disso nao ha polling enquanto o MQTT permanecer ativo.
+  consultarComandos();
+  return true;
+}
+
+void manterMqtt() {
+  if (WiFi.status() != WL_CONNECTED) {
+    return;
+  }
+
+  if (clienteMqtt.connected()) {
+    clienteMqtt.loop();
+    unsigned long agora = millis();
+    if (agora - ultimoHeartbeatMqtt >= 15000) {
+      publicarStatusMqtt("online");
+      ultimoHeartbeatMqtt = agora;
+    }
+    return;
+  }
+
+  unsigned long agora = millis();
+  if (mqttDesconectadoDesde == 0) {
+    mqttDesconectadoDesde = agora;
+  }
+
+  if ((long)(agora - proximaTentativaMqtt) < 0) {
+    return;
+  }
+
+  if (conectarMqtt()) {
+    return;
+  }
+
+  proximaTentativaMqtt = agora + atrasoRetryMqtt;
+  atrasoRetryMqtt = min(atrasoRetryMqtt * 2, MQTT_RETRY_MAX_MS);
+}
+
 void consultarComandos() {
 
   if (WiFi.status() != WL_CONNECTED) {
@@ -264,6 +464,7 @@ void consultarComandos() {
 
   http.addHeader("X-Device-Key", CHAVE_DISPOSITIVO);
   http.addHeader("X-Firmware-Version", String(VERSAO_FIRMWARE));
+  http.addHeader("X-Transport", clienteMqtt.connected() ? "mqtt-sync" : "http");
   int codigoHttp = http.GET();
   unsigned long duracaoConsulta = millis() - inicioConsulta;
 
@@ -295,52 +496,8 @@ void consultarComandos() {
   long comandoId = comando.substring(0, separador).toInt();
   int motor = comando.substring(separador + 1).toInt();
 
-  if (comandoId <= 0 || motor < 1 || motor > 4) {
-    Serial.println("Comando recebido com valores invalidos.");
-    return;
-  }
-
-  Serial.printf("Comando %ld recebido para motor %d em %lu ms.\n",
-                comandoId, motor, duracaoConsulta);
-
-  // Protecao para uma futura politica de retry no servidor/MQTT:
-  // se o mesmo comando reaparecer apos o motor ja ter girado, NAO gira novamente.
-  // Apenas tenta reenviar a confirmacao.
-  if (comandoId == ultimoComandoExecutado) {
-    Serial.printf("Comando %ld ja foi executado. Reenviando apenas confirmacao.\n", comandoId);
-    confirmarComando(comandoId);
-    return;
-  }
-
-  digitalWrite(ENABLE_MOTOR1, HIGH);
-  digitalWrite(ENABLE_MOTOR2, HIGH);
-  digitalWrite(ENABLE_MOTOR3, HIGH);
-  digitalWrite(ENABLE_MOTOR4, HIGH);
-
-  unsigned long inicioMotor = millis();
-  if (motor == 1) {
-    girarMotor(ENABLE_MOTOR1);
-  } else if (motor == 2) {
-    girarMotor(ENABLE_MOTOR2);
-  } else if (motor == 3) {
-    girarMotor(ENABLE_MOTOR3);
-  } else {
-    girarMotor(ENABLE_MOTOR4);
-  }
-  unsigned long duracaoMotor = millis() - inicioMotor;
-
-  // O ID e salvo na memoria nao volatil ANTES de falar com o servidor.
-  // Assim, se o motor girou e a internet cair durante a confirmacao, o ESP
-  // lembra apos reiniciar e evita executar novamente o mesmo comando.
-  registrarComandoExecutado(comandoId);
-
-  Serial.printf("Motor %d concluiu comando %ld em %lu ms.\n",
-                motor, comandoId, duracaoMotor);
-
-  if (!confirmarComando(comandoId)) {
-    Serial.printf("ATENCAO: motor girou, mas comando %ld ainda nao foi confirmado ao servidor.\n",
-                  comandoId);
-  }
+  Serial.printf("Comando HTTP obtido em %lu ms.\n", duracaoConsulta);
+  executarComando(comandoId, motor, "http");
 }
 
 
@@ -440,8 +597,17 @@ void setup() {
   Serial.print("IP do ESP32: ");
   Serial.println(WiFi.localIP());
 
+  clienteMqttTls.setCACert(MQTT_CA_CERT);
+  clienteMqtt.setServer(MQTT_HOST, MQTT_PORT);
+  clienteMqtt.setCallback(aoReceberMqtt);
+  clienteMqtt.setKeepAlive(45);
+  clienteMqtt.setSocketTimeout(8);
+
   // Verifica uma nova versao logo depois de conectar.
   verificarAtualizacao();
+
+  mqttDesconectadoDesde = millis();
+  conectarMqtt();
 }
 
 
@@ -460,8 +626,15 @@ void loop() {
     // Wi-Fi conectado
     digitalWrite(LED_WIFI, HIGH);
 
+    manterMqtt();
+
     unsigned long agora = millis();
-    if (agora - ultimaConsultaComandos >= INTERVALO_COMANDOS_MS) {
+    bool fallbackHttpAtivo = !clienteMqtt.connected() &&
+      mqttDesconectadoDesde != 0 &&
+      agora - mqttDesconectadoDesde >= ATRASO_ATIVAR_FALLBACK_MS;
+
+    if (fallbackHttpAtivo &&
+        agora - ultimaConsultaComandos >= INTERVALO_COMANDOS_FALLBACK_MS) {
       ultimaConsultaComandos = agora;
       consultarComandos();
     }
@@ -470,5 +643,8 @@ void loop() {
 
     // Wi-Fi caiu
     digitalWrite(LED_WIFI, LOW);
+    if (mqttDesconectadoDesde == 0) {
+      mqttDesconectadoDesde = millis();
+    }
   }
 }

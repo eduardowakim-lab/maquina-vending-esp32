@@ -21,16 +21,17 @@ jobs:
       - name: Setup Arduino CLI
         uses: arduino/setup-arduino-cli@v2
 
-      - name: Install ESP32 core and WiFiManager
+      - name: Install ESP32 core and libraries
         run: |
           arduino-cli config init
           arduino-cli core update-index
           arduino-cli core install esp32:esp32
           arduino-cli lib install "WiFiManager"
+          arduino-cli lib install "PubSubClient"
 
       - name: Create compile-only Arduino secrets header
         run: |
-          printf '#pragma once\nconst char* CHAVE_DISPOSITIVO = "compile-only-placeholder-key-1234567890";\n' > Blink/arduino_secrets.h
+          printf '#pragma once\nconst char* CHAVE_DISPOSITIVO = "compile-only-placeholder-key-1234567890";\nconst char* MQTT_USUARIO = "machine-001";\nconst char* MQTT_SENHA = "compile-only-mqtt-password";\n' > Blink/arduino_secrets.h
 
       - name: Compile firmware
         run: |

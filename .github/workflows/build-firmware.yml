@@ -21,22 +21,25 @@ jobs:
       - name: Setup Arduino CLI
         uses: arduino/setup-arduino-cli@v2
 
-      - name: Install ESP32 core and WiFiManager
+      - name: Install ESP32 core and libraries
         run: |
           arduino-cli config init
           arduino-cli core update-index
           arduino-cli core install esp32:esp32
           arduino-cli lib install "WiFiManager"
+          arduino-cli lib install "PubSubClient"
 
       - name: Create private Arduino secrets header
         env:
           CHAVE_DISPOSITIVO: ${{ secrets.CHAVE_DISPOSITIVO }}
+          MQTT_USUARIO: ${{ secrets.MQTT_USUARIO }}
+          MQTT_SENHA: ${{ secrets.MQTT_SENHA }}
         run: |
-          if [ -z "$CHAVE_DISPOSITIVO" ]; then
-            echo "Repository secret CHAVE_DISPOSITIVO is missing."
+          if [ -z "$CHAVE_DISPOSITIVO" ] || [ -z "$MQTT_USUARIO" ] || [ -z "$MQTT_SENHA" ]; then
+            echo "One or more firmware repository secrets are missing."
             exit 1
           fi
-          printf '#pragma once\nconst char* CHAVE_DISPOSITIVO = "%s";\n' "$CHAVE_DISPOSITIVO" > Blink/arduino_secrets.h
+          printf '#pragma once\nconst char* CHAVE_DISPOSITIVO = "%s";\nconst char* MQTT_USUARIO = "%s";\nconst char* MQTT_SENHA = "%s";\n' "$CHAVE_DISPOSITIVO" "$MQTT_USUARIO" "$MQTT_SENHA" > Blink/arduino_secrets.h
 
       - name: Compile firmware
         run: |

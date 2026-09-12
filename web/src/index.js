@@ -386,7 +386,9 @@ async function enqueuePaidCommand(env, deviceId, motor, now) {
   const result = await env.DB.prepare(
     "INSERT INTO device_commands (device_id, motor, status, created_at) VALUES (?, ?, 'pending', ?)"
   ).bind(deviceId, motor, now).run();
-  return { id: result.meta.last_row_id };
+  const command = { id: result.meta.last_row_id, deviceId, motor };
+  await publishDeviceCommand(env, command);
+  return command;
 }
 
 async function createTestCommand(env, motor) {
@@ -400,10 +402,50 @@ async function createTestCommand(env, motor) {
     "SELECT id FROM device_commands WHERE device_id = ? AND status IN ('pending', 'claimed') LIMIT 1"
   ).bind(deviceId).first();
   if (active) throw new HttpError(409, "Ja existe um teste aguardando o ESP32.");
-  await env.DB.prepare(
+  const result = await env.DB.prepare(
     "INSERT INTO device_commands (device_id, motor, status, created_at) VALUES (?, ?, 'pending', ?)"
   ).bind(deviceId, motor, now).run();
+  await publishDeviceCommand(env, { id: result.meta.last_row_id, deviceId, motor });
   return json({ ok: true });
+}
+
+async function publishDeviceCommand(env, command) {
+  if (!env.EMQX_API_ENDPOINT || !env.EMQX_API_APP_ID || !env.EMQX_API_SECRET) {
+    console.warn(JSON.stringify({ event: "mqtt_publish_skipped", reason: "missing_emqx_configuration", command_id: command.id }));
+    return false;
+  }
+
+  const mqttMachineId = env.MQTT_MACHINE_ID || "machine-001";
+  const endpoint = `${String(env.EMQX_API_ENDPOINT).replace(/\/$/, "")}/publish`;
+  const credentials = btoa(`${env.EMQX_API_APP_ID}:${env.EMQX_API_SECRET}`);
+  let response;
+  try {
+    response = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        "Authorization": `Basic ${credentials}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        topic: `vending/${mqttMachineId}/down/command`,
+        payload: `${command.id},${command.motor}`,
+        qos: 1,
+        retain: false
+      })
+    });
+  } catch (error) {
+    console.error(JSON.stringify({ event: "mqtt_publish_failed", command_id: command.id, detail: String(error) }));
+    return false;
+  }
+
+  if (response.status === 200 || response.status === 202) {
+    console.log(JSON.stringify({ event: "mqtt_command_published", command_id: command.id, subscriber_online: response.status === 200 }));
+    return true;
+  }
+
+  const errorText = (await response.text()).slice(0, 500);
+  console.error(JSON.stringify({ event: "mqtt_publish_failed", command_id: command.id, status: response.status, detail: errorText }));
+  return false;
 }
 
 async function requireDevice(request, env, deviceId) {

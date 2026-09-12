@@ -112,6 +112,93 @@ async function adminDeviceStatus(request, env) {
   }
 }
 
+async function readSmallJson(request, maxBytes = 16384) {
+  if (!request.body) return {};
+  const reader = request.body.getReader();
+  const chunks = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > maxBytes) throw new Error("payload_too_large");
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return JSON.parse(new TextDecoder().decode(bytes) || "{}");
+}
+
+async function secureSecretEqual(actual, expected) {
+  const encoder = new TextEncoder();
+  const [actualHash, expectedHash] = await Promise.all([
+    crypto.subtle.digest("SHA-256", encoder.encode(actual)),
+    crypto.subtle.digest("SHA-256", encoder.encode(expected))
+  ]);
+  const left = new Uint8Array(actualHash);
+  const right = new Uint8Array(expectedHash);
+  let difference = left.length ^ right.length;
+  for (let index = 0; index < left.length; index++) difference |= left[index] ^ right[index];
+  return difference === 0;
+}
+
+async function receiveEmqxEvent(request, env) {
+  if (!env.EMQX_WEBHOOK_SECRET) {
+    return Response.json({ error: "Webhook MQTT nao configurado." }, { status: 503 });
+  }
+  const suppliedSecret = request.headers.get("X-EMQX-Webhook-Secret") || "";
+  if (!suppliedSecret || !await secureSecretEqual(suppliedSecret, env.EMQX_WEBHOOK_SECRET)) {
+    return Response.json({ error: "Nao autorizado." }, { status: 401 });
+  }
+
+  let body;
+  try {
+    body = await readSmallJson(request);
+  } catch {
+    return Response.json({ error: "Evento MQTT invalido." }, { status: 400 });
+  }
+
+  const topic = typeof body.topic === "string" ? body.topic : "";
+  let payload = body.payload;
+  if (typeof payload === "string") {
+    try { payload = JSON.parse(payload); } catch { payload = {}; }
+  }
+  if (!payload || typeof payload !== "object") payload = {};
+
+  const statusMatch = topic.match(/^vending\/([a-z0-9-]+)\/up\/status$/);
+  if (statusMatch) {
+    const now = Math.floor(Date.now() / 1000);
+    const online = payload.status === "online";
+    const firmwareVersion = Number(payload.firmwareVersion || 0);
+    await env.DB.prepare(
+      "UPDATE devices SET last_seen = ?, firmware_version = CASE WHEN ? > 0 THEN ? ELSE firmware_version END, transport = 'mqtt' WHERE device_id = ?"
+    ).bind(online ? now : 0, firmwareVersion, firmwareVersion, "machine-1").run();
+    return Response.json({ ok: true });
+  }
+
+  const ackMatch = topic.match(/^vending\/([a-z0-9-]+)\/up\/ack$/);
+  if (ackMatch) {
+    const commandId = Number(payload.commandId || 0);
+    if (!Number.isInteger(commandId) || commandId <= 0 || payload.status !== "completed") {
+      return Response.json({ error: "ACK MQTT invalido." }, { status: 400 });
+    }
+    await env.DB.prepare(
+      "UPDATE device_commands SET status = 'completed', completed_at = ? WHERE id = ? AND device_id = ? AND status IN ('pending', 'claimed')"
+    ).bind(Math.floor(Date.now() / 1000), commandId, "machine-1").run();
+    return Response.json({ ok: true });
+  }
+
+  return Response.json({ ok: true, ignored: true });
+}
+
 async function adminSales(request, env) {
   const url = new URL(request.url);
   const authUrl = new URL(request.url);
@@ -177,6 +264,10 @@ export default {
   async fetch(request, env, ctx) {
     const path = new URL(request.url).pathname;
 
+    if (request.method === "POST" && path === "/api/emqx/events") {
+      return receiveEmqxEvent(request, env);
+    }
+
     if (request.method === "GET" && path === "/api/admin/sales") {
       return adminSales(request, env);
     }
@@ -191,8 +282,9 @@ export default {
       const deviceId = url.searchParams.get("device_id") || "";
       const firmwareVersion = Number(request.headers.get("X-Firmware-Version") || 0);
       try {
-        await env.DB.prepare("UPDATE devices SET last_seen = ?, firmware_version = CASE WHEN ? > 0 THEN ? ELSE firmware_version END, transport = 'http' WHERE device_id = ?")
-          .bind(Math.floor(Date.now()/1000), firmwareVersion, firmwareVersion, deviceId).run();
+        const requestedTransport = request.headers.get("X-Transport") === "mqtt-sync" ? "mqtt" : "http";
+        await env.DB.prepare("UPDATE devices SET last_seen = ?, firmware_version = CASE WHEN ? > 0 THEN ? ELSE firmware_version END, transport = ? WHERE device_id = ?")
+          .bind(Math.floor(Date.now()/1000), firmwareVersion, firmwareVersion, requestedTransport, deviceId).run();
       } catch {}
     }
     const headers = new Headers(response.headers);

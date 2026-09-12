@@ -9,9 +9,13 @@ Os pinos `ENABLE` dos motores 1 a 4 sao, respectivamente, GPIO 21, 13, 12 e 14.
 ## Controle pelo site
 
 O painel administrativo possui um botao `Testar motor` para cada produto. O
-ESP32 consulta a Cloudflare a cada 2 segundos, recebe o comando e gira somente
-o motor solicitado. A chave privada do dispositivo fica em
-`Blink/arduino_secrets.h` e nao e enviada ao GitHub.
+ESP32 recebe comandos principalmente por MQTT com TLS. Enquanto MQTT estiver
+conectado nao existe polling continuo. Se o broker ficar indisponivel por 30
+segundos, o firmware volta temporariamente para a consulta HTTP a cada 3
+segundos. Ao reconectar ao MQTT, o polling HTTP para automaticamente.
+
+A chave privada HTTP e as credenciais MQTT ficam em
+`Blink/arduino_secrets.h` e nao sao enviadas ao GitHub.
 
 O botao de teste e exclusivo do administrador. No fluxo de venda, o comprador
 clica em `Comprar agora`, a Cloudflare cria o checkout no Mercado Pago usando
@@ -32,6 +36,33 @@ Configure estes secrets no Worker:
 - `MERCADO_PAGO_ACCESS_TOKEN`: access token da aplicacao Mercado Pago.
 - `MERCADO_PAGO_PUBLIC_KEY`: public key da mesma aplicacao; usada pelo Payment Brick no frontend.
 - `MERCADO_PAGO_WEBHOOK_SECRET`: chave do webhook gerada em Suas integracoes.
+- `EMQX_API_SECRET`: segredo da Deployment API Key usada para publicar comandos.
+- `EMQX_WEBHOOK_SECRET`: segredo compartilhado no header do webhook EMQX.
+
+As configuracoes publicas `EMQX_API_ENDPOINT`, `EMQX_API_APP_ID` e
+`MQTT_MACHINE_ID` ficam em `web/wrangler.jsonc`.
+
+## MQTT
+
+Broker TLS: `bd41a618.ala.us-east-1.emqxsl.com:8883`.
+
+- ESP32 publica `vending/machine-001/up/#` e assina
+  `vending/machine-001/down/#`.
+- O Worker publica comandos em `vending/machine-001/down/command` pela API do
+  EMQX, com QoS 1 e sem retained.
+- O ESP32 publica status retained a cada 15 segundos e usa Last Will `offline`.
+- Cada comando continua salvo na D1. Ao conectar, o ESP32 faz uma unica
+  sincronizacao HTTP para recuperar comandos criados enquanto esteve offline.
+- O ACK MQTT e acompanhado pela confirmacao HTTP do comando, preservando o
+  funcionamento antes da ativacao do webhook.
+
+Configure no EMQX uma integracao HTTP para `vending/+/up/status` e
+`vending/+/up/ack`, enviando POST para:
+
+`https://maquina-vending.eduardo-wakim.workers.dev/api/emqx/events`
+
+O corpo deve conter `topic` e `payload`, e o header
+`X-EMQX-Webhook-Secret` deve ter o mesmo valor do Secret do Worker.
 
 URL do webhook para configurar no Mercado Pago:
 
@@ -76,6 +107,8 @@ Abra `Blink/Blink.ino` na Arduino IDE e selecione:
 
 Conecte o ESP32 por USB e use o botao Upload. O arquivo local
 `Blink/arduino_secrets.h` precisa permanecer ao lado do sketch.
+
+Instale tambem as bibliotecas `WiFiManager` e `PubSubClient` na Arduino IDE.
 
 ## Atualizacao OTA
 
