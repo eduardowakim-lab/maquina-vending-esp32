@@ -11,7 +11,7 @@
 // =========================
 
 // Aumente este numero antes de compilar e publicar uma nova versao.
-#define VERSAO_FIRMWARE 7
+#define VERSAO_FIRMWARE 8
 
 const char* URL_VERSAO =
   "https://raw.githubusercontent.com/eduardowakim-lab/maquina-vending-esp32/main/ota/version.txt";
@@ -262,6 +262,7 @@ void consultarComandos() {
   }
 
   http.addHeader("X-Device-Key", CHAVE_DISPOSITIVO);
+  http.addHeader("X-Firmware-Version", String(VERSAO_FIRMWARE));
   int codigoHttp = http.GET();
   unsigned long duracaoConsulta = millis() - inicioConsulta;
 
