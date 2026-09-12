@@ -76,4 +76,5 @@ jobs:
 
           VERSION=$(cat ota/version.txt)
           git commit -m "Build OTA firmware v${VERSION}"
+          git pull --rebase origin main
           git push
