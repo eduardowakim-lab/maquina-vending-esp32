@@ -85,11 +85,6 @@ async function route(request, env) {
     const session = await requireAdmin(request, env);
     return updatePassword(request, env, session);
   }
-  if (request.method === "POST" && path === "/api/admin/wifi") {
-    requireSameOrigin(request);
-    await requireAdmin(request, env);
-    return createWifiCommand(request, env);
-  }
   const testMatch = path.match(/^\/api\/admin\/products\/(\d+)\/test$/);
   if (testMatch && request.method === "POST") {
     requireSameOrigin(request);
@@ -102,10 +97,6 @@ async function route(request, env) {
   const completeMatch = path.match(/^\/api\/device\/commands\/(\d+)\/complete$/);
   if (completeMatch && request.method === "POST") {
     return completeDeviceCommand(request, env, url.searchParams.get("device_id") || "", Number(completeMatch[1]));
-  }
-  const wifiCompleteMatch = path.match(/^\/api\/device\/wifi\/(\d+)\/complete$/);
-  if (wifiCompleteMatch && request.method === "POST") {
-    return completeWifiCommand(request, env, url.searchParams.get("device_id") || "", Number(wifiCompleteMatch[1]), url.searchParams.get("result") || "");
   }
   const imageMatch = path.match(/^\/api\/admin\/products\/(\d+)\/image$/);
   if (imageMatch && request.method === "POST") {
@@ -415,36 +406,6 @@ async function createTestCommand(env, motor) {
   return json({ ok: true });
 }
 
-async function createWifiCommand(request, env) {
-  const body = await readJson(request);
-  const ssid = typeof body.ssid === "string" ? body.ssid.trim() : "";
-  const password = typeof body.password === "string" ? body.password : "";
-  if (!ssid || ssid.length > 32) throw new HttpError(400, "Informe um nome de Wi-Fi valido (ate 32 caracteres).");
-  if (password.length > 63) throw new HttpError(400, "A senha do Wi-Fi deve ter no maximo 63 caracteres.");
-
-  const deviceId = "machine-1";
-  const now = Math.floor(Date.now() / 1000);
-  await env.DB.prepare(
-    "UPDATE wifi_commands SET status = 'expired', network_key = '' WHERE device_id = ? AND status IN ('pending','claimed')"
-  ).bind(deviceId).run();
-  await env.DB.prepare(
-    "INSERT INTO wifi_commands (device_id, ssid, network_key, status, created_at) VALUES (?, ?, ?, 'pending', ?)"
-  ).bind(deviceId, ssid, password, now).run();
-  return json({ ok: true, message: "Nova rede enviada para a maquina." });
-}
-
-async function completeWifiCommand(request, env, deviceId, commandId, result) {
-  await requireDevice(request, env, deviceId);
-  if (!["success", "failed"].includes(result)) throw new HttpError(400, "Resultado invalido.");
-  const now = Math.floor(Date.now() / 1000);
-  const status = result === "success" ? "completed" : "failed";
-  const changed = await env.DB.prepare(
-    "UPDATE wifi_commands SET status = ?, result = ?, network_key = '', completed_at = ? WHERE id = ? AND device_id = ? AND status = 'claimed'"
-  ).bind(status, result, now, commandId, deviceId).run();
-  if (!changed.meta.changes) throw new HttpError(404, "Comando de Wi-Fi nao encontrado.");
-  return json({ ok: true });
-}
-
 async function requireDevice(request, env, deviceId) {
   if (!/^[a-z0-9-]{3,40}$/.test(deviceId)) throw new HttpError(401, "Dispositivo invalido.");
   const token = request.headers.get("X-Device-Key") || "";
@@ -463,41 +424,15 @@ async function nextDeviceCommand(request, env, deviceId) {
   await env.DB.prepare(
     "UPDATE device_commands SET status = 'expired' WHERE device_id = ? AND status IN ('pending', 'claimed') AND created_at < ?"
   ).bind(deviceId, now - 300).run();
-
-  // Motores sempre tem prioridade para nao atrasar uma venda ja aprovada.
   const command = await env.DB.prepare(
     "SELECT id, motor FROM device_commands WHERE device_id = ? AND status = 'pending' ORDER BY id LIMIT 1"
   ).bind(deviceId).first();
-  if (command) {
-    const claimed = await env.DB.prepare(
-      "UPDATE device_commands SET status = 'claimed', claimed_at = ? WHERE id = ? AND status = 'pending'"
-    ).bind(now, command.id).run();
-    if (claimed.meta.changes) return textResponse(`${command.id},${command.motor}`);
-  }
-
-  // Reaproveita a mesma consulta HTTP do ESP para entregar uma eventual troca de Wi-Fi.
-  // Nao cria polling/requisicao adicional.
-  try {
-    await env.DB.prepare(
-      "UPDATE wifi_commands SET status = 'expired', network_key = '' WHERE device_id = ? AND status IN ('pending','claimed') AND created_at < ?"
-    ).bind(deviceId, now - 300).run();
-    const wifi = await env.DB.prepare(
-      "SELECT id, ssid, network_key FROM wifi_commands WHERE device_id = ? AND status = 'pending' ORDER BY id LIMIT 1"
-    ).bind(deviceId).first();
-    if (wifi) {
-      const claimedWifi = await env.DB.prepare(
-        "UPDATE wifi_commands SET status = 'claimed', claimed_at = ? WHERE id = ? AND status = 'pending'"
-      ).bind(now, wifi.id).run();
-      if (claimedWifi.meta.changes) {
-        return textResponse(`WIFI|${wifi.id}|${encodeURIComponent(wifi.ssid)}|${encodeURIComponent(wifi.network_key || "")}`);
-      }
-    }
-  } catch (error) {
-    // Mantem compatibilidade caso a migracao de Wi-Fi ainda nao tenha sido aplicada.
-    console.error(JSON.stringify({ event: "wifi_command_lookup_error", message: String(error) }));
-  }
-
-  return new Response(null, { status: 204, headers: SECURITY_HEADERS });
+  if (!command) return new Response(null, { status: 204, headers: SECURITY_HEADERS });
+  const claimed = await env.DB.prepare(
+    "UPDATE device_commands SET status = 'claimed', claimed_at = ? WHERE id = ? AND status = 'pending'"
+  ).bind(now, command.id).run();
+  if (!claimed.meta.changes) return new Response(null, { status: 204, headers: SECURITY_HEADERS });
+  return textResponse(`${command.id},${command.motor}`);
 }
 
 async function completeDeviceCommand(request, env, deviceId, commandId) {
