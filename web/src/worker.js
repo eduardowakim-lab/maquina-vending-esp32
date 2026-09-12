@@ -98,7 +98,7 @@ async function adminDeviceStatus(request, env) {
   const authResponse = await requireAdminThroughApp(request, env);
   if (!authResponse.ok) return authResponse;
   try {
-    const device = await env.DB.prepare("SELECT device_id, enabled, last_seen, firmware_version, transport FROM devices WHERE device_id = ?").bind("machine-1").first();
+    const device = await env.DB.prepare("SELECT device_id, enabled, last_seen, firmware_version, transport, wifi_ssid FROM devices WHERE device_id = ?").bind("machine-1").first();
     const now = Math.floor(Date.now() / 1000);
     const lastSeen = Number(device?.last_seen || 0);
     return Response.json({
@@ -106,7 +106,8 @@ async function adminDeviceStatus(request, env) {
       online: Boolean(device?.enabled) && lastSeen > 0 && (now - lastSeen) <= 20,
       last_seen: lastSeen || null,
       firmware_version: device?.firmware_version || null,
-      transport: device?.transport || "http"
+      transport: device?.transport || "http",
+      wifi_ssid: device?.wifi_ssid || ""
     });
   } catch {
     return Response.json({ error: "A atualização de status da máquina ainda não foi aplicada ao banco." }, { status: 503 });
@@ -191,9 +192,10 @@ export default {
       const url = new URL(request.url);
       const deviceId = url.searchParams.get("device_id") || "";
       const firmwareVersion = Number(request.headers.get("X-Firmware-Version") || 0);
+      const wifiSsid = (request.headers.get("X-Wifi-SSID") || "").slice(0, 64);
       try {
-        await env.DB.prepare("UPDATE devices SET last_seen = ?, firmware_version = CASE WHEN ? > 0 THEN ? ELSE firmware_version END, transport = 'http' WHERE device_id = ?")
-          .bind(Math.floor(Date.now()/1000), firmwareVersion, firmwareVersion, deviceId).run();
+        await env.DB.prepare("UPDATE devices SET last_seen = ?, firmware_version = CASE WHEN ? > 0 THEN ? ELSE firmware_version END, transport = 'http', wifi_ssid = CASE WHEN ? <> '' THEN ? ELSE wifi_ssid END WHERE device_id = ?")
+          .bind(Math.floor(Date.now()/1000), firmwareVersion, firmwareVersion, wifiSsid, wifiSsid, deviceId).run();
       } catch {}
     }
     const headers = new Headers(response.headers);
