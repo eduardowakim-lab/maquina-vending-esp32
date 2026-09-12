@@ -425,10 +425,10 @@ async function createWifiCommand(request, env) {
   const deviceId = "machine-1";
   const now = Math.floor(Date.now() / 1000);
   await env.DB.prepare(
-    "UPDATE wifi_commands SET status = 'expired', password = '' WHERE device_id = ? AND status IN ('pending','claimed')"
+    "UPDATE wifi_commands SET status = 'expired', network_key = '' WHERE device_id = ? AND status IN ('pending','claimed')"
   ).bind(deviceId).run();
   await env.DB.prepare(
-    "INSERT INTO wifi_commands (device_id, ssid, password, status, created_at) VALUES (?, ?, ?, 'pending', ?)"
+    "INSERT INTO wifi_commands (device_id, ssid, network_key, status, created_at) VALUES (?, ?, ?, 'pending', ?)"
   ).bind(deviceId, ssid, password, now).run();
   return json({ ok: true, message: "Nova rede enviada para a maquina." });
 }
@@ -439,7 +439,7 @@ async function completeWifiCommand(request, env, deviceId, commandId, result) {
   const now = Math.floor(Date.now() / 1000);
   const status = result === "success" ? "completed" : "failed";
   const changed = await env.DB.prepare(
-    "UPDATE wifi_commands SET status = ?, result = ?, password = '', completed_at = ? WHERE id = ? AND device_id = ? AND status = 'claimed'"
+    "UPDATE wifi_commands SET status = ?, result = ?, network_key = '', completed_at = ? WHERE id = ? AND device_id = ? AND status = 'claimed'"
   ).bind(status, result, now, commandId, deviceId).run();
   if (!changed.meta.changes) throw new HttpError(404, "Comando de Wi-Fi nao encontrado.");
   return json({ ok: true });
@@ -479,17 +479,17 @@ async function nextDeviceCommand(request, env, deviceId) {
   // Nao cria polling/requisicao adicional.
   try {
     await env.DB.prepare(
-      "UPDATE wifi_commands SET status = 'expired', password = '' WHERE device_id = ? AND status IN ('pending','claimed') AND created_at < ?"
+      "UPDATE wifi_commands SET status = 'expired', network_key = '' WHERE device_id = ? AND status IN ('pending','claimed') AND created_at < ?"
     ).bind(deviceId, now - 300).run();
     const wifi = await env.DB.prepare(
-      "SELECT id, ssid, password FROM wifi_commands WHERE device_id = ? AND status = 'pending' ORDER BY id LIMIT 1"
+      "SELECT id, ssid, network_key FROM wifi_commands WHERE device_id = ? AND status = 'pending' ORDER BY id LIMIT 1"
     ).bind(deviceId).first();
     if (wifi) {
       const claimedWifi = await env.DB.prepare(
         "UPDATE wifi_commands SET status = 'claimed', claimed_at = ? WHERE id = ? AND status = 'pending'"
       ).bind(now, wifi.id).run();
       if (claimedWifi.meta.changes) {
-        return textResponse(`WIFI|${wifi.id}|${encodeURIComponent(wifi.ssid)}|${encodeURIComponent(wifi.password || "")}`);
+        return textResponse(`WIFI|${wifi.id}|${encodeURIComponent(wifi.ssid)}|${encodeURIComponent(wifi.network_key || "")}`);
       }
     }
   } catch (error) {
