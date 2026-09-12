@@ -12,7 +12,7 @@
 // =========================
 
 // Aumente este numero antes de compilar e publicar uma nova versao.
-#define VERSAO_FIRMWARE 12
+#define VERSAO_FIRMWARE 13
 
 const char* URL_VERSAO =
   "https://raw.githubusercontent.com/eduardowakim-lab/maquina-vending-esp32/main/ota/version.txt";
@@ -361,7 +361,7 @@ void aoReceberMqtt(char* topico, byte* bytes, unsigned int tamanho) {
   executarComando(comandoId, motor, "mqtt");
 }
 
-void publicarStatusMqtt(const char* status) {
+bool publicarStatusMqtt(const char* status) {
   char payload[160];
   snprintf(payload, sizeof(payload),
            "{\"status\":\"%s\",\"deviceId\":\"machine-1\",\"mqttClientId\":\"machine-001\",\"firmwareVersion\":%d}",
@@ -369,7 +369,9 @@ void publicarStatusMqtt(const char* status) {
   if (!clienteMqtt.publish(MQTT_TOPICO_STATUS, payload, true)) {
     Serial.println("Falha ao publicar heartbeat MQTT. Forcando reconexao.");
     clienteMqtt.disconnect();
+    return false;
   }
+  return true;
 }
 
 bool conectarMqtt() {
@@ -402,7 +404,9 @@ bool conectarMqtt() {
     return false;
   }
 
-  publicarStatusMqtt("online");
+  if (!publicarStatusMqtt("online")) {
+    return false;
+  }
   ultimoHeartbeatMqtt = millis();
   mqttDesconectadoDesde = 0;
   atrasoRetryMqtt = 2000;
@@ -602,6 +606,7 @@ void setup() {
   Serial.println(WiFi.localIP());
 
   clienteMqttTls.setCACert(MQTT_CA_CERT);
+  clienteMqttTls.setHandshakeTimeout(5);
   clienteMqtt.setServer(MQTT_HOST, MQTT_PORT);
   clienteMqtt.setCallback(aoReceberMqtt);
   clienteMqtt.setKeepAlive(45);
@@ -611,7 +616,10 @@ void setup() {
   verificarAtualizacao();
 
   mqttDesconectadoDesde = millis();
-  conectarMqtt();
+
+  // Preserva primeiro o caminho HTTP que ja era estavel. A tentativa MQTT
+  // ocorre depois no loop e nao impede a inicializacao completa da maquina.
+  consultarComandos();
 }
 
 
@@ -630,8 +638,6 @@ void loop() {
     // Wi-Fi conectado
     digitalWrite(LED_WIFI, HIGH);
 
-    manterMqtt();
-
     unsigned long agora = millis();
     bool fallbackHttpAtivo = !clienteMqtt.connected() &&
       mqttDesconectadoDesde != 0 &&
@@ -642,6 +648,9 @@ void loop() {
       ultimaConsultaComandos = agora;
       consultarComandos();
     }
+
+    // Executa o fallback antes de uma nova tentativa TLS do MQTT.
+    manterMqtt();
 
   } else {
 

@@ -92,3 +92,12 @@ test("firmware does not open an HTTP sync immediately after MQTT connects", asyn
   assert.doesNotMatch(connectBody, /consultarComandos\(\)/);
   assert.match(source, /Falha ao publicar heartbeat MQTT\. Forcando reconexao\./);
 });
+
+test("firmware preserves HTTP startup and runs fallback before MQTT reconnect", async () => {
+  const source = await readFile(new URL("../../Blink/Blink.ino", import.meta.url), "utf8");
+  const setupBody = source.slice(source.indexOf("void setup()"), source.indexOf("void loop()"));
+  const loopBody = source.slice(source.indexOf("void loop()"));
+  assert.match(setupBody, /consultarComandos\(\)/);
+  assert.doesNotMatch(setupBody, /conectarMqtt\(\)/);
+  assert.ok(loopBody.indexOf("consultarComandos();") < loopBody.indexOf("manterMqtt();"));
+});
