@@ -32,19 +32,20 @@ const MACHINE_HTML = `<section class="admin-tab-panel hidden" data-admin-panel="
 </section>`;
 
 const WIFI_HTML = `<section class="admin-tab-panel hidden" data-admin-panel="wifi">
-<h2>Alterar o Wi-Fi da máquina</h2>
+<h2>Wi-Fi da máquina</h2>
 <div class="help-card">
-<p><strong>Quando precisar trocar a rede ou a senha do Wi-Fi:</strong></p>
-<ol>
-<li>Fique próximo da máquina com o celular.</li>
-<li>Coloque o ESP32 no modo de configuração do Wi-Fi. Quando ele não tiver uma rede válida salva, ele cria a rede <strong>Maquina-ESP32</strong>.</li>
-<li>No celular, abra as redes Wi-Fi e conecte em <strong>Maquina-ESP32</strong>.</li>
-<li>O portal de configuração deve abrir automaticamente. Se não abrir, acesse <strong>192.168.4.1</strong> no navegador.</li>
-<li>Escolha a nova rede Wi-Fi, informe a senha e salve.</li>
-<li>O ESP32 reinicia/conecta e o status da aba <strong>Máquina</strong> volta para Online.</li>
-</ol>
-<p class="hint">A senha do Wi-Fi não fica exposta neste painel. A configuração é feita localmente no ESP32, o que continua funcionando mesmo se a máquina estiver sem internet.</p>
+<div class="current-wifi"><span>Rede atual</span><strong id="wifi-current-ssid">Carregando...</strong></div>
+<form id="wifi-form" class="wifi-form">
+<label>Nova rede (SSID)<input id="wifi-ssid" type="text" maxlength="32" autocomplete="off" placeholder="Nome do Wi-Fi" required></label>
+<label>Nova senha<div class="password-row"><input id="wifi-password" type="password" maxlength="63" autocomplete="new-password" placeholder="Senha do Wi-Fi"><button id="wifi-toggle-password" class="secondary" type="button">Exibir</button></div></label>
+<button id="wifi-save" type="submit">Salvar e conectar</button>
+</form>
+<p id="wifi-message" class="hint">A máquina vai testar a nova rede. Se não conseguir conectar, mantém a configuração anterior.</p>
 </div>
+<details class="help-card wifi-recovery"><summary>Ajuda / recuperação local</summary>
+<p>Se a máquina estiver sem internet, use o portal local <strong>Maquina-ESP32</strong>. Conecte o celular nessa rede e abra <strong>192.168.4.1</strong>.</p>
+<p class="hint">A senha atual nunca é exibida no painel.</p>
+</details>
 <hr><h2>Trocar senha do painel</h2>
 <div id="password-slot"></div>
 </section>`;
