@@ -12,7 +12,7 @@
 // =========================
 
 // Aumente este numero antes de compilar e publicar uma nova versao.
-#define VERSAO_FIRMWARE 11
+#define VERSAO_FIRMWARE 12
 
 const char* URL_VERSAO =
   "https://raw.githubusercontent.com/eduardowakim-lab/maquina-vending-esp32/main/ota/version.txt";
@@ -366,7 +366,10 @@ void publicarStatusMqtt(const char* status) {
   snprintf(payload, sizeof(payload),
            "{\"status\":\"%s\",\"deviceId\":\"machine-1\",\"mqttClientId\":\"machine-001\",\"firmwareVersion\":%d}",
            status, VERSAO_FIRMWARE);
-  clienteMqtt.publish(MQTT_TOPICO_STATUS, payload, true);
+  if (!clienteMqtt.publish(MQTT_TOPICO_STATUS, payload, true)) {
+    Serial.println("Falha ao publicar heartbeat MQTT. Forcando reconexao.");
+    clienteMqtt.disconnect();
+  }
 }
 
 bool conectarMqtt() {
@@ -405,9 +408,9 @@ bool conectarMqtt() {
   atrasoRetryMqtt = 2000;
   Serial.println("MQTT conectado e aguardando comandos.");
 
-  // Sincroniza uma unica vez para recuperar comando criado enquanto a maquina
-  // estava offline. Depois disso nao ha polling enquanto o MQTT permanecer ativo.
-  consultarComandos();
+  // Nao abre uma segunda conexao TLS/HTTPS enquanto o MQTT esta conectado.
+  // Comandos criados durante uma queda sao recuperados pelo fallback HTTP antes
+  // da reconexao ou pela sessao persistente do MQTT.
   return true;
 }
 

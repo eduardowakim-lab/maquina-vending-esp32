@@ -103,7 +103,7 @@ async function adminDeviceStatus(request, env) {
     const lastSeen = Number(device?.last_seen || 0);
     return Response.json({
       device_id: "machine-1",
-      online: Boolean(device?.enabled) && lastSeen > 0 && (now - lastSeen) <= 20,
+      online: Boolean(device?.enabled) && lastSeen > 0 && (now - lastSeen) <= 45,
       last_seen: lastSeen || null,
       firmware_version: device?.firmware_version || null,
       transport: device?.transport || "http"

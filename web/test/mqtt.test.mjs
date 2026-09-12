@@ -85,3 +85,10 @@ test("firmware avoids opening HTTP TLS when MQTT ACK was sent", async () => {
   assert.match(source, /if \(!ackMqttEnviado && !confirmarComando\(comandoId\)\)/);
   assert.match(source, /bool publicarAckMqtt/);
 });
+
+test("firmware does not open an HTTP sync immediately after MQTT connects", async () => {
+  const source = await readFile(new URL("../../Blink/Blink.ino", import.meta.url), "utf8");
+  const connectBody = source.slice(source.indexOf("bool conectarMqtt()"), source.indexOf("void manterMqtt()"));
+  assert.doesNotMatch(connectBody, /consultarComandos\(\)/);
+  assert.match(source, /Falha ao publicar heartbeat MQTT\. Forcando reconexao\./);
+});
