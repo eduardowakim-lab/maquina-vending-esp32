@@ -13,7 +13,45 @@ const BRICK_CSP = [
   "frame-ancestors 'none'"
 ].join("; ");
 
-const SALES_HTML = `<hr><section id="sales-section"><div class="sales-heading"><div><h2>Vendas por mola</h2><p class="hint">Somente pagamentos reais aprovados. Testes de motor n&atilde;o entram.</p></div><button id="sales-this-week" class="secondary sales-week-button" type="button">Esta semana</button></div><form id="sales-filter" class="sales-filter"><label>De<input id="sales-from" type="date" required></label><label>At&eacute;<input id="sales-to" type="date" required></label><button type="submit">Atualizar</button></form><div id="sales-summary" class="sales-summary"><div class="hint">Carregando vendas...</div></div></section>`;
+const SALES_HTML = `<section id="sales-section" class="admin-tab-panel hidden" data-admin-panel="sales"><div class="sales-heading"><div><h2>Vendas por mola</h2><p class="hint">Somente pagamentos reais aprovados. Testes de motor n&atilde;o entram.</p></div><button id="sales-this-week" class="secondary sales-week-button" type="button">Esta semana</button></div><form id="sales-filter" class="sales-filter"><label>De<input id="sales-from" type="date" required></label><label>At&eacute;<input id="sales-to" type="date" required></label><button type="submit">Atualizar</button></form><div id="sales-summary" class="sales-summary"><div class="hint">Carregando vendas...</div></div></section>`;
+
+const ADMIN_TABS_HTML = `<nav class="admin-tabs" aria-label="Seções da administração">
+<button type="button" class="admin-tab active" data-admin-tab="products">Produtos</button>
+<button type="button" class="admin-tab" data-admin-tab="sales">Vendas</button>
+<button type="button" class="admin-tab" data-admin-tab="machine">Máquina</button>
+<button type="button" class="admin-tab" data-admin-tab="wifi">Wi-Fi / Ajuda</button>
+</nav>`;
+
+const MACHINE_HTML = `<section class="admin-tab-panel hidden" data-admin-panel="machine">
+<h2>Status da máquina</h2>
+<div id="machine-status-card" class="machine-status-card">
+<div class="status-line"><span id="machine-status-dot" class="status-dot unknown"></span><strong id="machine-status-label">Verificando...</strong></div>
+<div class="machine-meta"><div><span>Último contato</span><strong id="machine-last-seen">—</strong></div><div><span>Firmware</span><strong id="machine-firmware">—</strong></div><div><span>Comunicação</span><strong id="machine-transport">—</strong></div></div>
+<p class="hint">O status aproveita a comunicação que o ESP32 já faz com o servidor. Não cria um ping rápido extra. Se migrarmos para MQTT, esta mesma tela continuará funcionando.</p>
+</div>
+</section>`;
+
+const WIFI_HTML = `<section class="admin-tab-panel hidden" data-admin-panel="wifi">
+<h2>Alterar o Wi-Fi da máquina</h2>
+<div class="help-card">
+<p><strong>Quando precisar trocar a rede ou a senha do Wi-Fi:</strong></p>
+<ol>
+<li>Fique próximo da máquina com o celular.</li>
+<li>Coloque o ESP32 no modo de configuração do Wi-Fi. Quando ele não tiver uma rede válida salva, ele cria a rede <strong>Maquina-ESP32</strong>.</li>
+<li>No celular, abra as redes Wi-Fi e conecte em <strong>Maquina-ESP32</strong>.</li>
+<li>O portal de configuração deve abrir automaticamente. Se não abrir, acesse <strong>192.168.4.1</strong> no navegador.</li>
+<li>Escolha a nova rede Wi-Fi, informe a senha e salve.</li>
+<li>O ESP32 reinicia/conecta e o status da aba <strong>Máquina</strong> volta para Online.</li>
+</ol>
+<p class="hint">A senha do Wi-Fi não fica exposta neste painel. A configuração é feita localmente no ESP32, o que continua funcionando mesmo se a máquina estiver sem internet.</p>
+</div>
+<hr><h2>Trocar senha do painel</h2>
+<div id="password-slot"></div>
+</section>`;
+
+const ADMIN_TABS_CSS = `.admin-tabs{display:flex;gap:8px;overflow-x:auto;margin:0 0 22px;padding:4px}.admin-tab{flex:0 0 auto;border:1px solid var(--line);border-radius:999px;background:#fff;color:var(--ink);font:inherit;font-weight:800;padding:10px 16px;cursor:pointer}.admin-tab.active{background:var(--accent);border-color:var(--accent);color:#fff}.admin-tab-panel.hidden{display:none!important}.machine-status-card,.help-card{border:1px solid var(--line);border-radius:18px;background:#fff;padding:20px}.status-line{display:flex;align-items:center;gap:10px;font-size:1.25rem;margin-bottom:18px}.status-dot{width:13px;height:13px;border-radius:50%;display:inline-block;background:#aab1ad}.status-dot.online{background:#00a650;box-shadow:0 0 0 5px rgba(0,166,80,.12)}.status-dot.offline{background:#c43737;box-shadow:0 0 0 5px rgba(196,55,55,.12)}.machine-meta{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-bottom:16px}.machine-meta>div{border:1px solid var(--line);border-radius:14px;padding:14px}.machine-meta span{display:block;color:var(--muted);font-size:.8rem;margin-bottom:4px}.machine-meta strong{display:block}.help-card ol{padding-left:22px;line-height:1.55}.help-card li{margin:8px 0}@media(max-width:650px){.admin-tabs{margin-left:-6px;margin-right:-6px}.machine-meta{grid-template-columns:1fr}}`;
+
+const ADMIN_TABS_JS = `;(()=>{const tabs=[...document.querySelectorAll("[data-admin-tab]")];const panels=[...document.querySelectorAll("[data-admin-panel]")];let statusTimer=null;function showTab(name){tabs.forEach(tab=>tab.classList.toggle("active",tab.dataset.adminTab===name));panels.forEach(panel=>panel.classList.toggle("hidden",panel.dataset.adminPanel!==name));if(name==="machine"){loadMachineStatus();if(!statusTimer)statusTimer=setInterval(loadMachineStatus,30000)}else if(statusTimer){clearInterval(statusTimer);statusTimer=null}}async function loadMachineStatus(){const label=document.querySelector("#machine-status-label");const dot=document.querySelector("#machine-status-dot");const last=document.querySelector("#machine-last-seen");const firmware=document.querySelector("#machine-firmware");const transport=document.querySelector("#machine-transport");if(!label||!dot)return;try{const response=await fetch("/api/admin/device-status",{headers:{Accept:"application/json"}});const data=await response.json();if(!response.ok)throw new Error(data.error||"Falha ao consultar status.");label.textContent=data.online?"Online":"Offline";dot.className="status-dot "+(data.online?"online":"offline");last.textContent=data.last_seen?new Date(data.last_seen*1000).toLocaleString("pt-BR"):"Ainda não recebido";firmware.textContent=data.firmware_version?"v"+data.firmware_version:"—";transport.textContent=(data.transport||"http").toUpperCase()}catch(error){label.textContent="Status indisponível";dot.className="status-dot unknown";last.textContent=error.message}}tabs.forEach(tab=>tab.addEventListener("click",()=>showTab(tab.dataset.adminTab)));const passwordForm=document.querySelector("#password-form");const passwordSlot=document.querySelector("#password-slot");if(passwordForm&&passwordSlot){passwordSlot.append(passwordForm);const logout=document.querySelector("#logout");if(logout)passwordSlot.append(logout)}showTab("products")})();`;
 
 const SALES_CSS = `.sales-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:16px}.sales-heading h2{margin:0 0 5px}.sales-week-button{border:0;border-radius:12px;color:#fff;font:inherit;font-weight:800;padding:11px 14px;cursor:pointer}.sales-filter{display:grid;grid-template-columns:1fr 1fr auto;gap:12px;align-items:end;margin:18px 0}.sales-filter button{padding:13px 18px}.sales-summary{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}.sales-card{border:1px solid var(--line);border-radius:16px;background:#fff;padding:16px}.sales-card strong{display:block;font-size:1.7rem;letter-spacing:-.03em;margin-top:4px}.sales-card .sales-revenue{color:var(--muted);font-size:.86rem;margin-top:4px}.sales-total{grid-column:1/-1;background:#eefaf2}.sales-empty{grid-column:1/-1;padding:18px;border:1px dashed var(--line);border-radius:14px;color:var(--muted);text-align:center}@media(max-width:650px){.sales-heading{display:block}.sales-week-button{margin-top:12px}.sales-filter{grid-template-columns:1fr 1fr}.sales-filter button{grid-column:1/-1}.sales-summary{grid-template-columns:1fr}.sales-total{grid-column:1}}`;
 
@@ -35,16 +73,44 @@ function promoteBrickCheckout(path, text) {
 function enhanceAdmin(path, text) {
   if (path === "/admin") {
     return text
-      .replace("<hr><h2>Trocar senha</h2>", `${SALES_HTML}<hr><h2>Trocar senha</h2>`)
-      .replace("/admin.js?v=4", "/admin.js?v=6");
+      .replace('<section id="admin-panel" class="panel hidden">', '<section id="admin-panel" class="panel hidden">'+ADMIN_TABS_HTML+'<section class="admin-tab-panel" data-admin-panel="products">')
+      .replace('</form><hr><h2>Trocar senha</h2>', '</form></section>'+SALES_HTML+MACHINE_HTML+WIFI_HTML+'<div class="legacy-account hidden"><hr><h2>Trocar senha</h2>')
+      .replace('<button id="logout" class="link-button" type="button">Sair</button></section>', '<button id="logout" class="link-button" type="button">Sair</button></div></section>');
   }
-  if (path === "/styles.css") return `${text}${SALES_CSS}`;
-  if (path === "/admin.js") return `${text}${SALES_JS}`;
+  if (path === "/styles.css") return `${text}${SALES_CSS}${ADMIN_TABS_CSS}`;
+  if (path === "/admin.js") return `${text}${SALES_JS}${ADMIN_TABS_JS}`;
   return text;
 }
 
 function validDate(value) {
   return /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(`${value}T12:00:00-03:00`));
+}
+
+async function requireAdminThroughApp(request, env) {
+  const authUrl = new URL(request.url);
+  authUrl.pathname = "/api/admin/products";
+  authUrl.search = "";
+  const authRequest = new Request(authUrl, { method: "GET", headers: request.headers });
+  return app.fetch(authRequest, env);
+}
+
+async function adminDeviceStatus(request, env) {
+  const authResponse = await requireAdminThroughApp(request, env);
+  if (!authResponse.ok) return authResponse;
+  try {
+    const device = await env.DB.prepare("SELECT device_id, enabled, last_seen, firmware_version, transport FROM devices WHERE device_id = ?").bind("machine-1").first();
+    const now = Math.floor(Date.now() / 1000);
+    const lastSeen = Number(device?.last_seen || 0);
+    return Response.json({
+      device_id: "machine-1",
+      online: Boolean(device?.enabled) && lastSeen > 0 && (now - lastSeen) <= 20,
+      last_seen: lastSeen || null,
+      firmware_version: device?.firmware_version || null,
+      transport: device?.transport || "http"
+    });
+  } catch {
+    return Response.json({ error: "A atualização de status da máquina ainda não foi aplicada ao banco." }, { status: 503 });
+  }
 }
 
 async function adminSales(request, env) {
@@ -115,8 +181,21 @@ export default {
     if (request.method === "GET" && path === "/api/admin/sales") {
       return adminSales(request, env);
     }
+    if (request.method === "GET" && path === "/api/admin/device-status") {
+      return adminDeviceStatus(request, env);
+    }
 
     const response = await app.fetch(request, env, ctx);
+
+    if (request.method === "GET" && path === "/api/device/commands/next" && response.ok) {
+      const url = new URL(request.url);
+      const deviceId = url.searchParams.get("device_id") || "";
+      const firmwareVersion = Number(request.headers.get("X-Firmware-Version") || 0);
+      try {
+        await env.DB.prepare("UPDATE devices SET last_seen = ?, firmware_version = CASE WHEN ? > 0 THEN ? ELSE firmware_version END, transport = 'http' WHERE device_id = ?")
+          .bind(Math.floor(Date.now()/1000), firmwareVersion, firmwareVersion, deviceId).run();
+      } catch {}
+    }
     const headers = new Headers(response.headers);
 
     headers.set("Content-Security-Policy", BRICK_CSP);
