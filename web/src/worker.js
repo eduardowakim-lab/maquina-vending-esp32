@@ -32,27 +32,25 @@ const MACHINE_HTML = `<section class="admin-tab-panel hidden" data-admin-panel="
 </section>`;
 
 const WIFI_HTML = `<section class="admin-tab-panel hidden" data-admin-panel="wifi">
-<h2>Wi-Fi da máquina</h2>
+<h2>Alterar o Wi-Fi da máquina</h2>
 <div class="help-card">
-<div class="current-wifi"><span>Rede atual</span><strong id="wifi-current-ssid">Carregando...</strong></div>
-<form id="wifi-form" class="wifi-form">
-<label>Nova rede (SSID)<input id="wifi-ssid" type="text" maxlength="32" autocomplete="off" placeholder="Nome do Wi-Fi" required></label>
-<label>Nova senha<div class="password-row"><input id="wifi-password" type="password" maxlength="63" autocomplete="new-password" placeholder="Senha do Wi-Fi"><button id="wifi-toggle-password" class="secondary" type="button">Exibir</button></div></label>
-<button id="wifi-save" type="submit">Salvar e conectar</button>
-</form>
-<p id="wifi-message" class="hint">A máquina vai testar a nova rede. Se não conseguir conectar, mantém a configuração anterior.</p>
+<p><strong>Quando precisar trocar a rede ou a senha do Wi-Fi:</strong></p>
+<ol>
+<li>Fique próximo da máquina com o celular.</li>
+<li>Se o ESP32 entrar no modo de configuração, ele cria a rede <strong>Maquina-ESP32</strong>.</li>
+<li>No celular, conecte nessa rede.</li>
+<li>Se o portal não abrir automaticamente, acesse <strong>192.168.4.1</strong>.</li>
+<li>Escolha a nova rede Wi-Fi, informe a senha e salve.</li>
+</ol>
+<p class="hint">A troca remota pelo painel ainda ficará desativada até o firmware ter teste e retorno automático para a rede anterior.</p>
 </div>
-<details class="help-card wifi-recovery"><summary>Ajuda / recuperação local</summary>
-<p>Se a máquina estiver sem internet, use o portal local <strong>Maquina-ESP32</strong>. Conecte o celular nessa rede e abra <strong>192.168.4.1</strong>.</p>
-<p class="hint">A senha atual nunca é exibida no painel.</p>
-</details>
 <hr><h2>Trocar senha do painel</h2>
 <div id="password-slot"></div>
 </section>`;
 
-const ADMIN_TABS_CSS = `.admin-tabs{display:flex;gap:8px;overflow-x:auto;margin:0 0 22px;padding:4px}.admin-tab{flex:0 0 auto;border:1px solid var(--line);border-radius:999px;background:#fff;color:var(--ink);font:inherit;font-weight:800;padding:10px 16px;cursor:pointer}.admin-tab.active{background:var(--accent);border-color:var(--accent);color:#fff}.admin-tab-panel.hidden{display:none!important}.machine-status-card,.help-card{border:1px solid var(--line);border-radius:18px;background:#fff;padding:20px}.status-line{display:flex;align-items:center;gap:10px;font-size:1.25rem;margin-bottom:18px}.status-dot{width:13px;height:13px;border-radius:50%;display:inline-block;background:#aab1ad}.status-dot.online{background:#00a650;box-shadow:0 0 0 5px rgba(0,166,80,.12)}.status-dot.offline{background:#c43737;box-shadow:0 0 0 5px rgba(196,55,55,.12)}.machine-meta{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-bottom:16px}.machine-meta>div{border:1px solid var(--line);border-radius:14px;padding:14px}.machine-meta span,.current-wifi span{display:block;color:var(--muted);font-size:.8rem;margin-bottom:4px}.machine-meta strong,.current-wifi strong{display:block}.wifi-form{display:grid;gap:14px;margin-top:18px}.password-row{display:grid;grid-template-columns:1fr auto;gap:8px}.password-row button{padding:0 14px}.current-wifi{border:1px solid var(--line);border-radius:14px;padding:14px}.wifi-recovery{margin-top:14px}.wifi-recovery summary{cursor:pointer;font-weight:800}.help-card ol{padding-left:22px;line-height:1.55}.help-card li{margin:8px 0}@media(max-width:650px){.admin-tabs{margin-left:-6px;margin-right:-6px}.machine-meta{grid-template-columns:1fr}.password-row{grid-template-columns:1fr}}`;
+const ADMIN_TABS_CSS = `.admin-tabs{display:flex;gap:8px;overflow-x:auto;margin:0 0 22px;padding:4px}.admin-tab{flex:0 0 auto;border:1px solid var(--line);border-radius:999px;background:#fff;color:var(--ink);font:inherit;font-weight:800;padding:10px 16px;cursor:pointer}.admin-tab.active{background:var(--accent);border-color:var(--accent);color:#fff}.admin-tab-panel.hidden{display:none!important}.machine-status-card,.help-card{border:1px solid var(--line);border-radius:18px;background:#fff;padding:20px}.status-line{display:flex;align-items:center;gap:10px;font-size:1.25rem;margin-bottom:18px}.status-dot{width:13px;height:13px;border-radius:50%;display:inline-block;background:#aab1ad}.status-dot.online{background:#00a650;box-shadow:0 0 0 5px rgba(0,166,80,.12)}.status-dot.offline{background:#c43737;box-shadow:0 0 0 5px rgba(196,55,55,.12)}.machine-meta{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-bottom:16px}.machine-meta>div{border:1px solid var(--line);border-radius:14px;padding:14px}.machine-meta span{display:block;color:var(--muted);font-size:.8rem;margin-bottom:4px}.machine-meta strong{display:block}.help-card ol{padding-left:22px;line-height:1.55}.help-card li{margin:8px 0}@media(max-width:650px){.admin-tabs{margin-left:-6px;margin-right:-6px}.machine-meta{grid-template-columns:1fr}}`;
 
-const ADMIN_TABS_JS = `;(()=>{const tabs=[...document.querySelectorAll("[data-admin-tab]")];const panels=[...document.querySelectorAll("[data-admin-panel]")];let statusTimer=null;async function loadMachineStatus(){const label=document.querySelector("#machine-status-label");const dot=document.querySelector("#machine-status-dot");const last=document.querySelector("#machine-last-seen");const firmware=document.querySelector("#machine-firmware");const transport=document.querySelector("#machine-transport");const wifiCurrent=document.querySelector("#wifi-current-ssid");try{const response=await fetch("/api/admin/device-status",{headers:{Accept:"application/json"}});const data=await response.json();if(!response.ok)throw new Error(data.error||"Falha ao consultar status.");if(label&&dot){label.textContent=data.online?"Online":"Offline";dot.className="status-dot "+(data.online?"online":"offline");last.textContent=data.last_seen?new Date(data.last_seen*1000).toLocaleString("pt-BR"):"Ainda não recebido";firmware.textContent=data.firmware_version?"v"+data.firmware_version:"—";transport.textContent=(data.transport||"http").toUpperCase()}if(wifiCurrent)wifiCurrent.textContent=data.wifi_ssid||"Ainda não informado pelo ESP"}catch(error){if(label&&dot){label.textContent="Status indisponível";dot.className="status-dot unknown";last.textContent=error.message}if(wifiCurrent)wifiCurrent.textContent="Não foi possível consultar"}}function showTab(name){tabs.forEach(tab=>tab.classList.toggle("active",tab.dataset.adminTab===name));panels.forEach(panel=>panel.classList.toggle("hidden",panel.dataset.adminPanel!==name));if(name==="machine"||name==="wifi"){loadMachineStatus();if(!statusTimer)statusTimer=setInterval(loadMachineStatus,30000)}else if(statusTimer){clearInterval(statusTimer);statusTimer=null}}tabs.forEach(tab=>tab.addEventListener("click",()=>showTab(tab.dataset.adminTab)));const passwordForm=document.querySelector("#password-form");const passwordSlot=document.querySelector("#password-slot");if(passwordForm&&passwordSlot){passwordSlot.append(passwordForm);const logout=document.querySelector("#logout");if(logout)passwordSlot.append(logout)}const wifiForm=document.querySelector("#wifi-form");const wifiPassword=document.querySelector("#wifi-password");const wifiToggle=document.querySelector("#wifi-toggle-password");const wifiMessage=document.querySelector("#wifi-message");wifiToggle?.addEventListener("click",()=>{const showing=wifiPassword.type==="text";wifiPassword.type=showing?"password":"text";wifiToggle.textContent=showing?"Exibir":"Ocultar"});wifiForm?.addEventListener("submit",async event=>{event.preventDefault();const ssid=document.querySelector("#wifi-ssid").value.trim();const password=wifiPassword.value;const button=document.querySelector("#wifi-save");if(!ssid)return;button.disabled=true;wifiMessage.textContent="Enviando a nova rede para a máquina...";try{const response=await fetch("/api/admin/wifi",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({ssid,password})});const data=await response.json();if(!response.ok)throw new Error(data.error||"Não foi possível enviar a configuração.");wifiMessage.textContent="Configuração enviada. O ESP vai testar a nova rede e pode ficar offline por alguns segundos.";wifiPassword.value="";let tries=0;const wait=setInterval(async()=>{tries++;await loadMachineStatus();if(tries>=12)clearInterval(wait)},5000)}catch(error){wifiMessage.textContent=error.message}finally{button.disabled=false}});showTab("products")})();`;
+const ADMIN_TABS_JS = `;(()=>{const tabs=[...document.querySelectorAll("[data-admin-tab]")];const panels=[...document.querySelectorAll("[data-admin-panel]")];let statusTimer=null;function showTab(name){tabs.forEach(tab=>tab.classList.toggle("active",tab.dataset.adminTab===name));panels.forEach(panel=>panel.classList.toggle("hidden",panel.dataset.adminPanel!==name));if(name==="machine"){loadMachineStatus();if(!statusTimer)statusTimer=setInterval(loadMachineStatus,30000)}else if(statusTimer){clearInterval(statusTimer);statusTimer=null}}async function loadMachineStatus(){const label=document.querySelector("#machine-status-label");const dot=document.querySelector("#machine-status-dot");const last=document.querySelector("#machine-last-seen");const firmware=document.querySelector("#machine-firmware");const transport=document.querySelector("#machine-transport");if(!label||!dot)return;try{const response=await fetch("/api/admin/device-status",{headers:{Accept:"application/json"}});const data=await response.json();if(!response.ok)throw new Error(data.error||"Falha ao consultar status.");label.textContent=data.online?"Online":"Offline";dot.className="status-dot "+(data.online?"online":"offline");last.textContent=data.last_seen?new Date(data.last_seen*1000).toLocaleString("pt-BR"):"Ainda não recebido";firmware.textContent=data.firmware_version?"v"+data.firmware_version:"—";transport.textContent=(data.transport||"http").toUpperCase()}catch(error){label.textContent="Status indisponível";dot.className="status-dot unknown";last.textContent=error.message}}tabs.forEach(tab=>tab.addEventListener("click",()=>showTab(tab.dataset.adminTab)));const passwordForm=document.querySelector("#password-form");const passwordSlot=document.querySelector("#password-slot");if(passwordForm&&passwordSlot){passwordSlot.append(passwordForm);const logout=document.querySelector("#logout");if(logout)passwordSlot.append(logout)}showTab("products")})();`;
 
 const SALES_CSS = `.sales-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:16px}.sales-heading h2{margin:0 0 5px}.sales-quick{display:flex;gap:8px;flex-wrap:wrap;margin:14px 0 4px}.sales-quick button{border:0;border-radius:12px;color:#fff;font:inherit;font-weight:800;padding:11px 14px;cursor:pointer}.sales-filter{display:grid;grid-template-columns:1fr 1fr auto;gap:12px;align-items:end;margin:18px 0}.sales-filter button{padding:13px 18px}.sales-summary{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}.sales-card{border:1px solid var(--line);border-radius:16px;background:#fff;padding:16px}.sales-card strong{display:block;font-size:1.7rem;letter-spacing:-.03em;margin-top:4px}.sales-card .sales-revenue{color:var(--muted);font-size:.86rem;margin-top:4px}.sales-total{grid-column:1/-1;background:#eefaf2}.sales-empty{grid-column:1/-1;padding:18px;border:1px dashed var(--line);border-radius:14px;color:var(--muted);text-align:center}@media(max-width:650px){.sales-heading{display:block}.sales-week-button{margin-top:12px}.sales-filter{grid-template-columns:1fr 1fr}.sales-filter button{grid-column:1/-1}.sales-summary{grid-template-columns:1fr}.sales-total{grid-column:1}}`;
 
@@ -99,7 +97,7 @@ async function adminDeviceStatus(request, env) {
   const authResponse = await requireAdminThroughApp(request, env);
   if (!authResponse.ok) return authResponse;
   try {
-    const device = await env.DB.prepare("SELECT device_id, enabled, last_seen, firmware_version, transport, wifi_ssid FROM devices WHERE device_id = ?").bind("machine-1").first();
+    const device = await env.DB.prepare("SELECT device_id, enabled, last_seen, firmware_version, transport FROM devices WHERE device_id = ?").bind("machine-1").first();
     const now = Math.floor(Date.now() / 1000);
     const lastSeen = Number(device?.last_seen || 0);
     return Response.json({
@@ -107,8 +105,7 @@ async function adminDeviceStatus(request, env) {
       online: Boolean(device?.enabled) && lastSeen > 0 && (now - lastSeen) <= 20,
       last_seen: lastSeen || null,
       firmware_version: device?.firmware_version || null,
-      transport: device?.transport || "http",
-      wifi_ssid: device?.wifi_ssid || ""
+      transport: device?.transport || "http"
     });
   } catch {
     return Response.json({ error: "A atualização de status da máquina ainda não foi aplicada ao banco." }, { status: 503 });
@@ -193,10 +190,9 @@ export default {
       const url = new URL(request.url);
       const deviceId = url.searchParams.get("device_id") || "";
       const firmwareVersion = Number(request.headers.get("X-Firmware-Version") || 0);
-      const wifiSsid = (request.headers.get("X-Wifi-SSID") || "").slice(0, 64);
       try {
-        await env.DB.prepare("UPDATE devices SET last_seen = ?, firmware_version = CASE WHEN ? > 0 THEN ? ELSE firmware_version END, transport = 'http', wifi_ssid = CASE WHEN ? <> '' THEN ? ELSE wifi_ssid END WHERE device_id = ?")
-          .bind(Math.floor(Date.now()/1000), firmwareVersion, firmwareVersion, wifiSsid, wifiSsid, deviceId).run();
+        await env.DB.prepare("UPDATE devices SET last_seen = ?, firmware_version = CASE WHEN ? > 0 THEN ? ELSE firmware_version END, transport = 'http' WHERE device_id = ?")
+          .bind(Math.floor(Date.now()/1000), firmwareVersion, firmwareVersion, deviceId).run();
       } catch {}
     }
     const headers = new Headers(response.headers);
