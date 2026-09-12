@@ -32,6 +32,7 @@ Preferences preferencias;
 long ultimoComandoExecutado = 0;
 
 // A atualizacao e consultada somente quando o ESP32 liga ou reinicia.
+// Build v8 republicado apos ajuste do fluxo OTA.
 
 // =========================
 // LED DO WIFI
