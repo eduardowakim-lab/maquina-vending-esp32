@@ -70,6 +70,18 @@ test("completes a command from an MQTT ACK", async () => {
   assert.equal(calls[0].values[1], 42);
 });
 
+test("accepts the EMQX secret in a TLS-protected JSON envelope", async () => {
+  const { env, calls } = testEnv();
+  const request = new Request("https://example.com/api/emqx/events", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ webhookSecret: env.EMQX_WEBHOOK_SECRET, event: { topic: "vending/machine-001/up/status", payload: JSON.stringify({ status: "online", firmwareVersion: 13 }) } })
+  });
+  const response = await worker.fetch(request, env);
+  assert.equal(response.status, 200);
+  assert.equal(calls.length, 1);
+});
+
 test("HTTP confirmation also completes a command delivered directly by MQTT", async () => {
   const source = await readFile(new URL("../src/index.js", import.meta.url), "utf8");
   assert.match(source, /status IN \('pending', 'claimed'\)/);

@@ -79,7 +79,7 @@ function enhanceAdmin(path, text) {
       .replace('</form><hr><h2>Trocar senha</h2>', '</form></section>'+SALES_HTML+MACHINE_HTML+WIFI_HTML+'<div class="legacy-account hidden"><hr><h2>Trocar senha</h2>')
       .replace('<button id="logout" class="link-button" type="button">Sair</button></section>', '<button id="logout" class="link-button" type="button">Sair</button></div></section>');
   }
-  if (path === "/styles.css") return `${text}${SALES_CSS}${ADMIN_TABS_CSS}.machine-refresh{margin-left:auto;padding:8px 12px;font-size:.88rem}`;
+  if (path === "/styles.css") return `${text}${SALES_CSS}${ADMIN_TABS_CSS}.machine-refresh{margin-left:auto;padding:8px 12px;font-size:.88rem;background:#24302a!important;color:#fff!important;border-color:#24302a!important}`;
   if (path === "/admin.js") return `${text}${SALES_JS}${ADMIN_TABS_JS}${STATUS_REFRESH_JS}`;
   return text;
 }
@@ -157,17 +157,21 @@ async function receiveEmqxEvent(request, env) {
   if (!env.EMQX_WEBHOOK_SECRET) {
     return Response.json({ error: "Webhook MQTT nao configurado." }, { status: 503 });
   }
-  const suppliedSecret = request.headers.get("X-EMQX-Webhook-Secret") || "";
-  if (!suppliedSecret || !await secureSecretEqual(suppliedSecret, env.EMQX_WEBHOOK_SECRET)) {
-    return Response.json({ error: "Nao autorizado." }, { status: 401 });
-  }
-
   let body;
   try {
     body = await readSmallJson(request);
   } catch {
+    console.warn(JSON.stringify({ event: "emqx_webhook_rejected", reason: "invalid_json" }));
     return Response.json({ error: "Evento MQTT invalido." }, { status: 400 });
   }
+
+  const suppliedSecret = request.headers.get("X-EMQX-Webhook-Secret") ||
+    (typeof body.webhookSecret === "string" ? body.webhookSecret : "");
+  if (!suppliedSecret || !await secureSecretEqual(suppliedSecret, env.EMQX_WEBHOOK_SECRET)) {
+    console.warn(JSON.stringify({ event: "emqx_webhook_rejected", reason: "unauthorized", has_secret: Boolean(suppliedSecret) }));
+    return Response.json({ error: "Nao autorizado." }, { status: 401 });
+  }
+  if (body.event && typeof body.event === "object") body = body.event;
 
   const topic = typeof body.topic === "string" ? body.topic : "";
   let payload = body.payload;
