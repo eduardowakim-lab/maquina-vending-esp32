@@ -67,7 +67,7 @@ function promoteBrickCheckout(path, text) {
   if (path !== "/app.js") return text;
 
   const oldButtons = 'const button=document.createElement("button");button.type="button";button.textContent="Comprar agora";button.addEventListener("click",()=>startCheckout(item,button));const newButton=document.createElement("button");newButton.type="button";newButton.className="new-payment";newButton.textContent="Novo pagamento (teste)";newButton.addEventListener("click",()=>startBrick(item,newButton));card.append(visual,title,price,button,newButton);container.append(card)';
-  const primaryButton = 'const button=document.createElement("button");button.type="button";button.textContent="Comprar agora";button.addEventListener("click",()=>startBrick(item,button));card.append(visual,title,price,button);container.append(card)';
+  const primaryButton = 'const button=document.createElement("button");button.type="button";button.textContent=data.machine_online===false?"Indisponível":"Comprar agora";button.disabled=data.machine_online===false;if(data.machine_online!==false)button.addEventListener("click",()=>startBrick(item,button));card.append(visual,title,price,button);container.append(card)';
 
   return text.replace(oldButtons, primaryButton);
 }
