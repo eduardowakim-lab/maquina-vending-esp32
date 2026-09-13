@@ -1,0 +1,204 @@
+name: Apply vending safety fixes
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/apply-vending-safety-fixes.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Apply requested fixes
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          p = Path("web/src/index.js")
+          s = p.read_text(encoding="utf-8")
+
+          if "async function machineIsOnline" not in s:
+              anchor = "async function createCheckout(request, env) {"
+              helper = '''async function machineIsOnline(env, deviceId = "machine-1") {
+            const now = Math.floor(Date.now() / 1000);
+            const device = await env.DB.prepare(
+              "SELECT enabled, last_seen FROM devices WHERE device_id = ?"
+            ).bind(deviceId).first();
+            const lastSeen = Number(device?.last_seen || 0);
+            return Boolean(device?.enabled) && lastSeen > 0 && lastSeen >= now - DEVICE_ONLINE_SECONDS;
+          }
+
+          async function requireMachineOnline(env, deviceId = "machine-1") {
+            if (!await machineIsOnline(env, deviceId)) {
+              throw new HttpError(503, "Maquina temporariamente em manutencao.");
+            }
+          }
+
+          '''
+              s = s.replace(anchor, helper + anchor, 1)
+
+          s = s.replace(
+          '''async function createCheckout(request, env) {
+            if (!env.MERCADO_PAGO_ACCESS_TOKEN) {
+              throw new HttpError(503, "Mercado Pago ainda nao configurado.");
+            }
+
+            const body = await readJson(request);''',
+          '''async function createCheckout(request, env) {
+            if (!env.MERCADO_PAGO_ACCESS_TOKEN) {
+              throw new HttpError(503, "Mercado Pago ainda nao configurado.");
+            }
+            await requireMachineOnline(env);
+
+            const body = await readJson(request);''', 1)
+
+          s = s.replace(
+          '''async function createBrickSession(request, env) {
+            if (!env.MERCADO_PAGO_ACCESS_TOKEN) throw new HttpError(503, "Mercado Pago ainda nao configurado.");
+            if (!env.MERCADO_PAGO_PUBLIC_KEY) throw new HttpError(503, "Adicione MERCADO_PAGO_PUBLIC_KEY para testar o novo pagamento.");
+
+            const body = await readJson(request);''',
+          '''async function createBrickSession(request, env) {
+            if (!env.MERCADO_PAGO_ACCESS_TOKEN) throw new HttpError(503, "Mercado Pago ainda nao configurado.");
+            if (!env.MERCADO_PAGO_PUBLIC_KEY) throw new HttpError(503, "Adicione MERCADO_PAGO_PUBLIC_KEY para testar o novo pagamento.");
+            await requireMachineOnline(env);
+
+            const body = await readJson(request);''', 1)
+
+          s = s.replace(
+          '''async function createBrickPayment(request, env) {
+            if (!env.MERCADO_PAGO_ACCESS_TOKEN) throw new HttpError(503, "Mercado Pago ainda nao configurado.");
+
+            const body = await readJson(request);''',
+          '''async function createBrickPayment(request, env) {
+            if (!env.MERCADO_PAGO_ACCESS_TOKEN) throw new HttpError(503, "Mercado Pago ainda nao configurado.");
+            await requireMachineOnline(env);
+
+            const body = await readJson(request);''', 1)
+
+          old = '''async function processMercadoPagoPayment(env, payment) {
+            const orderId = typeof payment.external_reference === "string" ? payment.external_reference : "";
+            const paymentId = String(payment.id || "");
+            if (!orderId || !paymentId) return;
+
+            const now = Math.floor(Date.now() / 1000);
+            const order = await env.DB.prepare("SELECT * FROM payment_orders WHERE id = ?").bind(orderId).first();
+            if (!order) return;
+            if (order.device_command_id) return;
+
+            const status = normalizeMercadoPagoStatus(payment.status || "");
+            await env.DB.prepare(
+              "UPDATE payment_orders SET status = ?, mp_payment_id = ?, updated_at = ?, paid_at = CASE WHEN ? = 'approved' THEN ? ELSE paid_at END WHERE id = ?"
+            ).bind(status, paymentId, now, status, now, orderId).run();
+
+            if (status !== "approved") return;
+            const command = await enqueuePaidCommand(env, order.device_id || "machine-1", Number(order.product_id), now);
+            await env.DB.prepare(
+              "UPDATE payment_orders SET status = 'commanded', device_command_id = ?, command_created_at = ?, updated_at = ? WHERE id = ? AND device_command_id IS NULL"
+            ).bind(command.id, now, now, orderId).run();
+          }'''
+          new = '''async function processMercadoPagoPayment(env, payment) {
+            const orderId = typeof payment.external_reference === "string" ? payment.external_reference : "";
+            const paymentId = String(payment.id || "");
+            if (!orderId || !paymentId) return;
+
+            const now = Math.floor(Date.now() / 1000);
+            const order = await env.DB.prepare("SELECT * FROM payment_orders WHERE id = ?").bind(orderId).first();
+            if (!order) return;
+            if (order.device_command_id || order.status === "commanded") return;
+
+            const status = normalizeMercadoPagoStatus(payment.status || "");
+            await env.DB.prepare(
+              "UPDATE payment_orders SET status = CASE WHEN status = 'commanded' OR device_command_id IS NOT NULL THEN status ELSE ? END, mp_payment_id = ?, updated_at = ?, paid_at = CASE WHEN ? = 'approved' THEN COALESCE(paid_at, ?) ELSE paid_at END WHERE id = ?"
+            ).bind(status, paymentId, now, status, now, orderId).run();
+
+            if (status !== "approved") return;
+
+            const claim = await env.DB.prepare(
+              "UPDATE payment_orders SET status = 'commanded', command_created_at = ?, updated_at = ? WHERE id = ? AND device_command_id IS NULL AND status = 'approved'"
+            ).bind(now, now, orderId).run();
+            if (!claim.meta.changes) return;
+
+            try {
+              const command = await enqueuePaidCommand(env, order.device_id || "machine-1", Number(order.product_id), now);
+              await env.DB.prepare(
+                "UPDATE payment_orders SET device_command_id = ?, updated_at = ? WHERE id = ? AND status = 'commanded' AND device_command_id IS NULL"
+              ).bind(command.id, now, orderId).run();
+            } catch (error) {
+              await env.DB.prepare(
+                "UPDATE payment_orders SET status = 'approved', command_created_at = NULL, updated_at = ? WHERE id = ? AND status = 'commanded' AND device_command_id IS NULL"
+              ).bind(now, orderId).run();
+              throw error;
+            }
+          }'''
+          if old not in s and "if (!claim.meta.changes) return;" not in s:
+              raise SystemExit("payment processing block not found")
+          if old in s:
+              s = s.replace(old, new, 1)
+
+          old = '''async function listPublicProducts(env) {
+            const result = await env.DB.prepare(
+              "SELECT id, name, price_cents, payment_url, image_key FROM products WHERE enabled = 1 ORDER BY id"
+            ).all();
+            return json({ products: result.results.map(withImageUrl) });
+          }'''
+          new = '''async function listPublicProducts(env) {
+            const [result, machineOnline] = await Promise.all([
+              env.DB.prepare(
+                "SELECT id, name, price_cents, payment_url, image_key FROM products WHERE enabled = 1 ORDER BY id"
+              ).all(),
+              machineIsOnline(env)
+            ]);
+            return json({
+              products: result.results.map(withImageUrl),
+              machine_online: machineOnline,
+              machine_message: machineOnline ? "" : "Maquina temporariamente em manutencao."
+            });
+          }'''
+          if old in s:
+              s = s.replace(old, new, 1)
+
+          old = 'container.replaceChildren();if(!data.products.length)'
+          new = 'container.replaceChildren();document.querySelector("#machine-maintenance")?.remove();if(data.machine_online===false){const maintenance=document.createElement("div");maintenance.id="machine-maintenance";maintenance.className="empty";maintenance.textContent=data.machine_message||"Maquina temporariamente em manutencao.";container.before(maintenance)}if(!data.products.length)'
+          if old in s:
+              s = s.replace(old, new, 1)
+
+          p.write_text(s, encoding="utf-8")
+
+          p = Path("web/src/worker.js")
+          s = p.read_text(encoding="utf-8")
+          old = '''const primaryButton = 'const button=document.createElement("button");button.type="button";button.textContent="Comprar agora";button.addEventListener("click",()=>startBrick(item,button));card.append(visual,title,price,button);container.append(card)';'''
+          new = '''const primaryButton = 'const button=document.createElement("button");button.type="button";button.textContent=data.machine_online===false?"Indisponível":"Comprar agora";button.disabled=data.machine_online===false;if(data.machine_online!==false)button.addEventListener("click",()=>startBrick(item,button));card.append(visual,title,price,button);container.append(card)';'''
+          if old in s:
+              s = s.replace(old, new, 1)
+          elif "button.disabled=data.machine_online===false" not in s:
+              raise SystemExit("worker purchase button block not found")
+          p.write_text(s, encoding="utf-8")
+          PY
+
+      - name: Verify requested protections
+        run: |
+          grep -q 'await requireMachineOnline(env)' web/src/index.js
+          grep -q 'if (!claim.meta.changes) return;' web/src/index.js
+          grep -q 'machine_online: machineOnline' web/src/index.js
+          grep -q 'button.disabled=data.machine_online===false' web/src/worker.js
+          cd web
+          npm ci
+          npm test
+
+      - name: Commit fixes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add web/src/index.js web/src/worker.js
+          if git diff --cached --quiet; then
+            echo "Fixes already present."
+            exit 0
+          fi
+          git commit -m "Harden offline checkout and payment command idempotency"
+          git push
