@@ -12,7 +12,7 @@
 // =========================
 
 // Aumente este numero antes de compilar e publicar uma nova versao.
-#define VERSAO_FIRMWARE 13
+#define VERSAO_FIRMWARE 14
 
 const char* URL_VERSAO =
   "https://raw.githubusercontent.com/eduardowakim-lab/maquina-vending-esp32/main/ota/version.txt";
@@ -69,6 +69,11 @@ MrY=
 
 WiFiClientSecure clienteMqttTls;
 PubSubClient clienteMqtt(clienteMqttTls);
+WiFiManager wifiManager;
+
+const unsigned long WIFI_RETRY_INTERVAL_MS = 10000;
+unsigned long proximaTentativaWifi = 0;
+bool portalWifiAtivo = false;
 
 Preferences preferencias;
 long ultimoComandoExecutado = 0;
@@ -559,51 +564,38 @@ void setup() {
   // WIFI MANAGER
   // -------------------------
 
-  WiFiManager wifiManager;
-
   Serial.println("Tentando conectar ao Wi-Fi...");
 
   /*
-     Se ja existir Wi-Fi salvo,
-     conecta automaticamente.
+     Mantem as credenciais ja salvas, mas nao bloqueia a inicializacao
+     caso o roteador esteja desligado no momento em que o ESP32 ligar.
 
-     Se nao existir,
-     cria a rede:
-
-     Maquina-ESP32
+     Se a rede salva estiver indisponivel, o portal Maquina-ESP32 pode
+     ficar ativo para reconfiguracao, enquanto o loop continua tentando
+     reconectar automaticamente em segundo plano.
   */
 
-  bool conectado =
-      wifiManager.autoConnect("Maquina-ESP32");
+  WiFi.mode(WIFI_STA);
+  WiFi.setAutoReconnect(true);
+  WiFi.persistent(true);
 
+  wifiManager.setConfigPortalBlocking(false);
+  bool conectado = wifiManager.autoConnect("Maquina-ESP32");
+  portalWifiAtivo = !conectado;
 
-  // -------------------------
-  // SE NAO CONECTAR
-  // -------------------------
+  if (conectado || WiFi.status() == WL_CONNECTED) {
+    digitalWrite(LED_WIFI, HIGH);
 
-  if (!conectado) {
+    Serial.println();
+    Serial.println("Wi-Fi conectado!");
 
+    Serial.print("IP do ESP32: ");
+    Serial.println(WiFi.localIP());
+  } else {
     digitalWrite(LED_WIFI, LOW);
-
-    Serial.println("Falha ao conectar ao Wi-Fi.");
-
-    delay(3000);
-
-    ESP.restart();
+    proximaTentativaWifi = millis();
+    Serial.println("Wi-Fi indisponivel no boot. Continuarei tentando a rede salva automaticamente.");
   }
-
-
-  // -------------------------
-  // WIFI CONECTADO
-  // -------------------------
-
-  digitalWrite(LED_WIFI, HIGH);
-
-  Serial.println();
-  Serial.println("Wi-Fi conectado!");
-
-  Serial.print("IP do ESP32: ");
-  Serial.println(WiFi.localIP());
 
   clienteMqttTls.setCACert(MQTT_CA_CERT);
   clienteMqttTls.setHandshakeTimeout(5);
@@ -633,10 +625,19 @@ void loop() {
   // VERIFICA WIFI
 // =========================
 
+  // Mantem o portal nao bloqueante responsivo, caso esteja ativo.
+  wifiManager.process();
+
   if (WiFi.status() == WL_CONNECTED) {
 
     // Wi-Fi conectado
     digitalWrite(LED_WIFI, HIGH);
+
+    if (portalWifiAtivo) {
+      wifiManager.stopConfigPortal();
+      portalWifiAtivo = false;
+      Serial.println("Rede salva voltou. Portal Wi-Fi encerrado.");
+    }
 
     unsigned long agora = millis();
     bool fallbackHttpAtivo = !clienteMqtt.connected() &&
@@ -654,10 +655,17 @@ void loop() {
 
   } else {
 
-    // Wi-Fi caiu
+    // Wi-Fi caiu ou ainda nao estava disponivel desde o boot.
     digitalWrite(LED_WIFI, LOW);
     if (mqttDesconectadoDesde == 0) {
       mqttDesconectadoDesde = millis();
+    }
+
+    unsigned long agora = millis();
+    if ((long)(agora - proximaTentativaWifi) >= 0) {
+      Serial.println("Tentando reconectar ao Wi-Fi salvo...");
+      WiFi.reconnect();
+      proximaTentativaWifi = agora + WIFI_RETRY_INTERVAL_MS;
     }
   }
 }
