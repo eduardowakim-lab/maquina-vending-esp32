@@ -32,6 +32,18 @@ const MACHINE_HTML = `<section class="admin-tab-panel hidden" data-admin-panel="
 </div>
 </section>`;
 
+
+const MACHINE_HISTORY_HTML = `<div class="machine-history">
+<div class="machine-history-heading"><div><h3>Histórico de conexão</h3><p class="hint">Mostra quando a máquina ficou offline e quando voltou a ficar online.</p></div></div>
+<div class="machine-history-quick"><button class="secondary" type="button" data-machine-history-range="7">7 dias</button><button class="secondary" type="button" data-machine-history-range="30">30 dias</button><button class="secondary" type="button" data-machine-history-range="12m">12 meses</button></div>
+<form id="machine-history-filter" class="machine-history-filter"><label>De<input id="machine-history-from" type="date" required></label><label>Até<input id="machine-history-to" type="date" required></label><button type="submit">Atualizar</button></form>
+<div id="machine-history-list" class="machine-history-list"><div class="hint">Carregando histórico...</div></div>
+</div>`;
+
+const MACHINE_HISTORY_CSS = `.machine-history{margin-top:18px;border:1px solid var(--line);border-radius:18px;background:#fff;padding:20px}.machine-history-heading h3{margin:0 0 5px;font-size:1.15rem}.machine-history-quick{display:flex;gap:8px;flex-wrap:wrap;margin:14px 0 4px}.machine-history-quick button{border:0;border-radius:12px;color:#fff;font:inherit;font-weight:800;padding:10px 13px;cursor:pointer}.machine-history-filter{display:grid;grid-template-columns:1fr 1fr auto;gap:12px;align-items:end;margin:18px 0}.machine-history-filter button{padding:13px 18px}.machine-history-list{display:grid;gap:9px}.machine-history-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:center;border:1px solid var(--line);border-radius:14px;padding:13px 14px}.machine-history-event{font-weight:800}.machine-history-time,.machine-history-duration{color:var(--muted);font-size:.84rem}.machine-history-duration{text-align:right}.machine-history-empty{padding:16px;border:1px dashed var(--line);border-radius:14px;color:var(--muted);text-align:center}@media(max-width:650px){.machine-history-filter{grid-template-columns:1fr 1fr}.machine-history-filter button{grid-column:1/-1}.machine-history-row{grid-template-columns:1fr}.machine-history-duration{text-align:left}}`;
+
+const MACHINE_HISTORY_JS = `;(()=>{const from=document.querySelector("#machine-history-from");const to=document.querySelector("#machine-history-to");const form=document.querySelector("#machine-history-filter");const list=document.querySelector("#machine-history-list");const quick=[...document.querySelectorAll("[data-machine-history-range]")];const machineTab=document.querySelector('[data-admin-tab="machine"]');if(!from||!to||!form||!list)return;function localDateValue(date){const year=date.getFullYear();const month=String(date.getMonth()+1).padStart(2,"0");const day=String(date.getDate()).padStart(2,"0");return year+"-"+month+"-"+day}function setRange(value){const now=new Date();const start=new Date(now);if(value==="12m")start.setFullYear(start.getFullYear()-1);else start.setDate(start.getDate()-(Number(value)-1));from.value=localDateValue(start);to.value=localDateValue(now)}function durationText(seconds){seconds=Math.max(0,Number(seconds)||0);if(seconds<60)return seconds+"s";if(seconds<3600)return Math.floor(seconds/60)+" min";if(seconds<86400){const h=Math.floor(seconds/3600),m=Math.floor((seconds%3600)/60);return h+"h"+(m?" "+m+"min":"")}const d=Math.floor(seconds/86400),h=Math.floor((seconds%86400)/3600);return d+"d"+(h?" "+h+"h":"")}function render(events){list.replaceChildren();const ordered=[...(events||[])].sort((a,b)=>a.at-b.at);const nextOnline=new Map();for(let i=0;i<ordered.length;i++){if(ordered[i].state!=="offline")continue;for(let j=i+1;j<ordered.length;j++){if(ordered[j].state==="online"){nextOnline.set(i,ordered[j].at);break}}}if(!ordered.length){const empty=document.createElement("div");empty.className="machine-history-empty";empty.textContent="Nenhuma mudança de conexão neste período.";list.append(empty);return}for(let i=ordered.length-1;i>=0;i--){const event=ordered[i];const row=document.createElement("div");row.className="machine-history-row";const left=document.createElement("div");const title=document.createElement("div");title.className="machine-history-event";title.textContent=event.state==="online"?"🟢 Voltou online":"🔴 Ficou offline";const time=document.createElement("div");time.className="machine-history-time";time.textContent=new Date(event.at*1000).toLocaleString("pt-BR");left.append(title,time);const duration=document.createElement("div");duration.className="machine-history-duration";if(event.state==="offline"){const end=nextOnline.get(i);duration.textContent=end?"Ficou fora por "+durationText(end-event.at):"Ainda offline"}row.append(left,duration);list.append(row)}}async function loadHistory(){if(!from.value||!to.value)return;if(from.value>to.value){list.textContent="Período inválido.";return}list.textContent="Carregando histórico...";try{const response=await fetch("/api/admin/device-history?from="+encodeURIComponent(from.value)+"&to="+encodeURIComponent(to.value),{headers:{Accept:"application/json"}});const data=await response.json();if(!response.ok)throw new Error(data.error||"Não foi possível carregar o histórico.");render(data.events)}catch(error){list.textContent=error.message}}form.addEventListener("submit",event=>{event.preventDefault();loadHistory()});quick.forEach(button=>button.addEventListener("click",()=>{setRange(button.dataset.machineHistoryRange);loadHistory()}));if(machineTab)machineTab.addEventListener("click",loadHistory);const refresh=document.querySelector("#machine-refresh");if(refresh)refresh.addEventListener("click",()=>setTimeout(loadHistory,50));setRange("7")})();`;
+
 const WIFI_HTML = `<section class="admin-tab-panel hidden" data-admin-panel="wifi">
 <h2>Alterar o Wi-Fi da máquina</h2>
 <div class="help-card">
@@ -76,11 +88,11 @@ function enhanceAdmin(path, text) {
   if (path === "/admin") {
     return text
       .replace('<section id="admin-panel" class="panel hidden">', '<section id="admin-panel" class="panel hidden">'+ADMIN_TABS_HTML+'<section class="admin-tab-panel" data-admin-panel="products">')
-      .replace('</form><hr><h2>Trocar senha</h2>', '</form></section>'+SALES_HTML+MACHINE_HTML+WIFI_HTML+'<div class="legacy-account hidden"><hr><h2>Trocar senha</h2>')
+      .replace('</form><hr><h2>Trocar senha</h2>', '</form></section>'+SALES_HTML+MACHINE_HTML.replace("</section>",MACHINE_HISTORY_HTML+"</section>")+WIFI_HTML+'<div class="legacy-account hidden"><hr><h2>Trocar senha</h2>')
       .replace('<button id="logout" class="link-button" type="button">Sair</button></section>', '<button id="logout" class="link-button" type="button">Sair</button></div></section>');
   }
-  if (path === "/styles.css") return `${text}${SALES_CSS}${ADMIN_TABS_CSS}.machine-refresh{margin-left:auto;padding:8px 12px;font-size:.88rem;background:#24302a!important;color:#fff!important;border-color:#24302a!important}`;
-  if (path === "/admin.js") return `${text}${SALES_JS}${ADMIN_TABS_JS}${STATUS_REFRESH_JS}`;
+  if (path === "/styles.css") return `${text}${SALES_CSS}${ADMIN_TABS_CSS}${MACHINE_HISTORY_CSS}.machine-refresh{margin-left:auto;padding:8px 12px;font-size:.88rem;background:#24302a!important;color:#fff!important;border-color:#24302a!important}`;
+  if (path === "/admin.js") return `${text}${SALES_JS}${ADMIN_TABS_JS}${STATUS_REFRESH_JS}${MACHINE_HISTORY_JS}`;
   return text;
 }
 
@@ -96,6 +108,52 @@ async function requireAdminThroughApp(request, env) {
   return app.fetch(authRequest, env);
 }
 
+
+const DEVICE_HISTORY_PREFIX = "device-status-history:v1:";
+const DEVICE_HISTORY_OFFLINE_SECONDS = 45;
+const DEVICE_HISTORY_MAX_EVENTS = 1500;
+async function readDeviceHistory(env, deviceId = "machine-1") {
+  try {
+    const stored = await env.PRODUCT_IMAGES.get(DEVICE_HISTORY_PREFIX + deviceId, "json");
+    if (!stored || !Array.isArray(stored.events)) return { events: [] };
+    return { events: stored.events.filter((event) => event && (event.state === "online" || event.state === "offline") && Number.isFinite(Number(event.at))).map((event) => ({ state: event.state, at: Number(event.at) })) };
+  } catch { return { events: [] }; }
+}
+async function writeDeviceHistory(env, deviceId, history) {
+  const events = history.events.slice(-DEVICE_HISTORY_MAX_EVENTS);
+  await env.PRODUCT_IMAGES.put(DEVICE_HISTORY_PREFIX + deviceId, JSON.stringify({ events }));
+  return { events };
+}
+function appendDeviceHistoryEvent(history, state, at) {
+  const timestamp = Math.max(1, Math.floor(Number(at) || 0));
+  if (!timestamp || (state !== "online" && state !== "offline")) return false;
+  const last = history.events[history.events.length - 1];
+  if (last?.state === state) return false;
+  history.events.push({ state, at: timestamp });
+  return true;
+}
+async function recordDeviceStatusEvent(env, deviceId, state, at) {
+  const history = await readDeviceHistory(env, deviceId);
+  if (!appendDeviceHistoryEvent(history, state, at)) return history;
+  return writeDeviceHistory(env, deviceId, history);
+}
+async function syncDeviceHistoryFromSnapshot(env, device, now = Math.floor(Date.now() / 1000)) {
+  const deviceId = device?.device_id || "machine-1";
+  const lastSeen = Number(device?.last_seen || 0);
+  const online = Boolean(device?.enabled) && lastSeen > 0 && (now - lastSeen) <= DEVICE_HISTORY_OFFLINE_SECONDS;
+  const history = await readDeviceHistory(env, deviceId);
+  const last = history.events[history.events.length - 1];
+  let changed = false;
+  if (online) {
+    if (last?.state !== "online") changed = appendDeviceHistoryEvent(history, "online", lastSeen || now) || changed;
+  } else if (last?.state !== "offline") {
+    const offlineAt = lastSeen > 0 ? Math.min(now, lastSeen + DEVICE_HISTORY_OFFLINE_SECONDS) : now;
+    changed = appendDeviceHistoryEvent(history, "offline", offlineAt) || changed;
+  }
+  if (changed) await writeDeviceHistory(env, deviceId, history);
+  return { online, history };
+}
+
 async function adminDeviceStatus(request, env) {
   const authResponse = await requireAdminThroughApp(request, env);
   if (!authResponse.ok) return authResponse;
@@ -103,9 +161,10 @@ async function adminDeviceStatus(request, env) {
     const device = await env.DB.prepare("SELECT device_id, enabled, last_seen, firmware_version, transport FROM devices WHERE device_id = ?").bind("machine-1").first();
     const now = Math.floor(Date.now() / 1000);
     const lastSeen = Number(device?.last_seen || 0);
+    const synced = await syncDeviceHistoryFromSnapshot(env, device, now);
     return Response.json({
       device_id: "machine-1",
-      online: Boolean(device?.enabled) && lastSeen > 0 && (now - lastSeen) <= 45,
+      online: synced.online,
       last_seen: lastSeen || null,
       firmware_version: device?.firmware_version || null,
       transport: device?.transport || "http"
@@ -113,6 +172,23 @@ async function adminDeviceStatus(request, env) {
   } catch {
     return Response.json({ error: "A atualização de status da máquina ainda não foi aplicada ao banco." }, { status: 503 });
   }
+}
+
+
+async function adminDeviceHistory(request, env) {
+  const authResponse = await requireAdminThroughApp(request, env);
+  if (!authResponse.ok) return authResponse;
+  const url = new URL(request.url);
+  const from = url.searchParams.get("from") || "";
+  const to = url.searchParams.get("to") || "";
+  if (!validDate(from) || !validDate(to) || from > to) return Response.json({ error: "Periodo invalido." }, { status: 400 });
+  const fromEpoch = Math.floor(new Date(from + "T00:00:00-03:00").getTime() / 1000);
+  const toEpoch = Math.floor(new Date(to + "T23:59:59-03:00").getTime() / 1000);
+  if ((toEpoch - fromEpoch) > 366 * 86400) return Response.json({ error: "Escolha um periodo de ate 366 dias." }, { status: 400 });
+  const device = await env.DB.prepare("SELECT device_id, enabled, last_seen, firmware_version, transport FROM devices WHERE device_id = ?").bind("machine-1").first();
+  const synced = await syncDeviceHistoryFromSnapshot(env, device, Math.floor(Date.now() / 1000));
+  const events = synced.history.events.filter((event) => event.at >= fromEpoch && event.at <= toEpoch);
+  return Response.json({ from, to, online: synced.online, events });
 }
 
 async function readSmallJson(request, maxBytes = 16384) {
@@ -153,7 +229,7 @@ async function secureSecretEqual(actual, expected) {
   return difference === 0;
 }
 
-async function receiveEmqxEvent(request, env) {
+async function receiveEmqxEvent(request, env, ctx) {
   if (!env.EMQX_WEBHOOK_SECRET) {
     return Response.json({ error: "Webhook MQTT nao configurado." }, { status: 503 });
   }
@@ -188,6 +264,7 @@ async function receiveEmqxEvent(request, env) {
     await env.DB.prepare(
       "UPDATE devices SET last_seen = ?, firmware_version = CASE WHEN ? > 0 THEN ? ELSE firmware_version END, transport = 'mqtt' WHERE device_id = ?"
     ).bind(online ? now : 0, firmwareVersion, firmwareVersion, "machine-1").run();
+    if (ctx?.waitUntil) ctx.waitUntil(recordDeviceStatusEvent(env, "machine-1", online ? "online" : "offline", now));
     return Response.json({ ok: true });
   }
 
@@ -272,7 +349,7 @@ export default {
     const path = new URL(request.url).pathname;
 
     if (request.method === "POST" && path === "/api/emqx/events") {
-      return receiveEmqxEvent(request, env);
+      return receiveEmqxEvent(request, env, ctx);
     }
 
     if (request.method === "GET" && path === "/api/admin/sales") {
@@ -280,6 +357,9 @@ export default {
     }
     if (request.method === "GET" && path === "/api/admin/device-status") {
       return adminDeviceStatus(request, env);
+    }
+    if (request.method === "GET" && path === "/api/admin/device-history") {
+      return adminDeviceHistory(request, env);
     }
 
     const response = await app.fetch(request, env, ctx);
@@ -290,8 +370,10 @@ export default {
       const firmwareVersion = Number(request.headers.get("X-Firmware-Version") || 0);
       try {
         const requestedTransport = request.headers.get("X-Transport") === "mqtt-sync" ? "mqtt" : "http";
+        const heartbeatAt = Math.floor(Date.now()/1000);
         await env.DB.prepare("UPDATE devices SET last_seen = ?, firmware_version = CASE WHEN ? > 0 THEN ? ELSE firmware_version END, transport = ? WHERE device_id = ?")
-          .bind(Math.floor(Date.now()/1000), firmwareVersion, firmwareVersion, requestedTransport, deviceId).run();
+          .bind(heartbeatAt, firmwareVersion, firmwareVersion, requestedTransport, deviceId).run();
+        if (ctx?.waitUntil) ctx.waitUntil(recordDeviceStatusEvent(env, deviceId, "online", heartbeatAt));
       } catch {}
     }
     const headers = new Headers(response.headers);
